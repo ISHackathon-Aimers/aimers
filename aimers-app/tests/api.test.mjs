@@ -4,10 +4,10 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { handleApi,dateKey,streak,periodStart } from '../src/api.mjs';
-function fixture(){
+function fixture(options={}){
  const sql=new DatabaseSync(':memory:');sql.exec(readFileSync(new URL('../drizzle/0000_aimers.sql',import.meta.url),'utf8'));
  const db={get:async(q,a=[])=>sql.prepare(q).get(...a),all:async(q,a=[])=>sql.prepare(q).all(...a),run:async(q,a=[])=>sql.prepare(q).run(...a),batch:async(items)=>{sql.exec('BEGIN');try{for(const[q,a]of items)sql.prepare(q).run(...a);sql.exec('COMMIT')}catch(e){sql.exec('ROLLBACK');throw e;}}};
- const call=async(id,path,method='GET',body,extra={})=>{const request=new Request('https://aimers.test/api/'+path,{method,headers:{'content-type':'application/json',origin:'https://aimers.test',...extra},body:body===undefined?undefined:JSON.stringify(body)});const r=await handleApi(request,db,id);return{status:r.status,data:await r.json()};};
+ const call=async(id,path,method='GET',body,extra={})=>{const request=new Request('https://aimers.test/api/'+path,{method,headers:{'content-type':'application/json',origin:'https://aimers.test',...extra},body:body===undefined?undefined:JSON.stringify(body)});const r=await handleApi(request,db,id,options);return{status:r.status,data:await r.json()};};
  return {db,call,close:()=>sql.close()};
 }
 const entry=(overrides={})=>({title:'나만의 프로젝트',category:'프로젝트',date:dateKey(),original:'나는 인터뷰 진행을 맡았다.\n팀원과 문제를 해결했다.\n협업의 중요성을 배웠다.',tags:['협업'],...overrides});
@@ -79,4 +79,36 @@ test('deleting example records never removes the users own records',async()=>{
  await f.call('a','samples','DELETE',{});
  const state=(await f.call('a','state')).data;assert.equal(state.entries.length,1);assert.equal(state.entries[0].title,'나만의 프로젝트');
  }finally{f.close()}
+});
+
+test('AI analyzes only owned records and preserves raw input when saving',async()=>{
+ const calls=[];const f=fixture({ai:async(task,data)=>{calls.push({task,data});return task==='summary'?{context:'AI 정리',action:'',result:'',source:'deepseek'}:{questions:[{question:'본인 역할은?',intent:'역할 확인'}]};}});
+ try{
+  const original='  인터뷰를 담당했다.\n\n';
+  const saved=await f.call('a','entries','POST',entry({original,useAI:true}));assert.equal(saved.status,201);
+  const own=(await f.call('a','state')).data.entries[0];assert.equal(own.original,original);assert.equal(own.summary.source,'deepseek');
+  assert.equal((await f.call('b','ai/interview','POST',{entryId:saved.data.id})).status,404);assert.equal(calls.length,1);
+  assert.equal((await f.call('a','ai/interview','POST',{entryId:saved.data.id})).status,200);assert.equal(calls[1].data.original,original);
+  assert.equal((await f.call('a','ai/reflect','POST',{original:'x'.repeat(20001)})).status,400);
+ }finally{f.close();}
+});
+test('AI failure never overwrites a record and raw save stays available',async()=>{
+ const f=fixture({ai:async()=>{throw Object.assign(new Error('AI unavailable'),{status:502});}});
+ try{
+  const created=await f.call('a','entries','POST',entry());
+  assert.equal((await f.call('a','entries/'+created.data.id,'PATCH',entry({original:'changed',useAI:true}))).status,502);
+  assert.equal((await f.call('a','state')).data.entries[0].original,entry().original);
+  assert.equal((await f.call('a','entries','POST',entry({useAI:true}))).status,502);
+  assert.equal((await f.call('a','state')).data.entries.length,1);
+ }finally{f.close();}
+});
+test('AI recommendations and semester reports never include another users records',async()=>{
+ const calls=[];const f=fixture({ai:async(task,data)=>{calls.push({task,data});return {};}});
+ try{
+  await f.call('a','entries','POST',entry({date:'2026-04-01'}));await f.call('b','entries','POST',entry({original:'OTHER USER SECRET'}));
+  assert.equal((await f.call('a','ai/recommend','POST',{question:'협업 경험'})).status,200);
+  assert.equal((await f.call('a','ai/report','POST',{semester:'2026-1'})).status,200);
+  assert.equal(calls[0].data.records.length,1);assert.equal(calls[1].data.current.length,1);assert.equal(calls[1].data.previous.length,0);
+  assert.equal(JSON.stringify(calls).includes('OTHER USER SECRET'),false);
+ }finally{f.close();}
 });

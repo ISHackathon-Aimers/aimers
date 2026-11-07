@@ -1,5 +1,5 @@
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
-const api=await readFile('src/api.mjs','utf8');
+const api=(await readFile('src/ai.mjs','utf8'))+'\n'+await readFile('src/api.mjs','utf8');
 const assets={};for(const [name,type]of [['index.html','text/html'],['style.css','text/css'],['app.js','text/javascript'],['favicon.svg','image/svg+xml']])assets[name]={body:await readFile('public/'+name,'utf8'),type};
 const worker=api+'\nconst assets='+JSON.stringify(assets)+';\n'+`
 export default {async fetch(request,env){
@@ -8,7 +8,7 @@ export default {async fetch(request,env){
  const identity=request.headers.get('oai-authenticated-user-id');
  if(!env.DB)return json({error:'데이터베이스 연결이 필요해요.'},503);
  const db={get:(s,a=[])=>env.DB.prepare(s).bind(...a).first(),all:async(s,a=[])=>{const r=await env.DB.prepare(s).bind(...a).all();return r.results;},run:(s,a=[])=>env.DB.prepare(s).bind(...a).run(),batch:items=>env.DB.batch(items.map(([s,a])=>env.DB.prepare(s).bind(...a)))};
- return handleApi(request,db,identity);
+ return handleApi(request,db,identity,{ai:createAI({apiKey:env.DEEPSEEK_API_KEY,model:env.DEEPSEEK_MODEL||'deepseek-flash'})});
  }
  const file=assets[url.pathname==='/'?'index.html':url.pathname.slice(1)];
  return file?new Response(file.body,{headers:{'content-type':file.type+'; charset=utf-8','x-content-type-options':'nosniff'}}):new Response('Not found',{status:404});

@@ -25,8 +25,9 @@ export function summarize(original) {
   return {context:sentences.slice(0,2).join(' ').slice(0,650),action:pick(/담당|맡|진행|기획|분석|제안|개발|설계|인터뷰|만들|조사|해결|작성/),result:pick(/결과|배웠|배운|느꼈|성과|달성|향상|개선|증가|감소|수상|완료|성장|중요|깨달/),source:'extractive'};
 }
 function validateEntry(data) {
- const title=clean(data.title,120), category=clean(data.category,40), original=clean(data.original,20000), date=clean(data.date,10);
- if(!title||!category||!original) fail('제목, 카테고리와 활동 내용을 입력해 주세요.');
+ const title=clean(data.title,120), category=clean(data.category,40), original=typeof data.original==='string'?data.original:'', date=clean(data.date,10);
+ if(!title||!category||!original.trim()) fail('제목, 카테고리와 활동 내용을 입력해 주세요.');
+ if(original.length>20000)fail('활동 내용은 20,000자까지 저장할 수 있어요.');
  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date))||new Date(date).toISOString().slice(0,10)!==date||date>dateKey())fail('활동 날짜를 확인해 주세요. 미래 날짜는 기록할 수 없어요.');
  const tags=(Array.isArray(data.tags)?data.tags:[]).map(t=>clean(t,20)).filter(Boolean).slice(0,6);
  return {title,category,original,date,tags};
@@ -56,7 +57,7 @@ async function seed(db,id){
  await db.run('INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?)',['sample-'+uid(),id,title,category,dateKey(created),original,JSON.stringify(summarize(original)),JSON.stringify(tags),created,created]);
  }
 }
-export async function handleApi(request,db,identity,{demo=false}={}) {
+export async function handleApi(request,db,identity,{demo=false,ai=null}={}) {
  try{
   if(!identity)fail('로그인이 필요해요.',401);
   const url=new URL(request.url),p=url.pathname,method=request.method;
@@ -77,8 +78,36 @@ export async function handleApi(request,db,identity,{demo=false}={}) {
     for(const m of g.members){const recent=await db.all('SELECT created_at,date FROM entries WHERE user_id=? ORDER BY created_at DESC',[m.id]);m.done=recent.some(e=>dateKey(e.created_at)>=g.start);m.streak=streak(recent);}
    }
    const notifications=await db.all('SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50',[identity]);
-   return json({me,entries,categories,groups,notifications,mode:demo?'local':'hosted',today:dateKey(),streak:streak(entries)});
+    return json({me,entries,categories,groups,notifications,mode:demo?'local':'hosted',today:dateKey(),streak:streak(entries),aiEnabled:!!ai});
   }
+   if(p.startsWith('/api/ai/')&&method==='POST'){
+    if(!ai)fail('AI 연결이 설정되지 않았어요. 원문 기록은 계속 사용할 수 있어요.',503);
+    const task=p.slice('/api/ai/'.length);
+    if(task==='reflect'){
+     if(typeof body.original!=='string'||!body.original.trim()||body.original.length>20000)fail('경험을 1~20,000자로 입력해 주세요.');
+     return json(await ai('reflect',{original:body.original,title:clean(body.title,120),category:clean(body.category,40)}));
+    }
+    if(task==='interview'){
+     const e=await db.get('SELECT * FROM entries WHERE id=? AND user_id=?',[clean(body.entryId,100),identity]);
+     if(!e)fail('기록을 찾을 수 없어요.',404);
+     return json(await ai('interview',{title:e.title,category:e.category,original:e.original}));
+    }
+    if(!['recommend','report'].includes(task))fail('요청한 AI 기능을 찾을 수 없어요.',404);
+    const all=(await db.all('SELECT * FROM entries WHERE user_id=? ORDER BY date DESC,created_at DESC',[identity])).map(entryView);
+    const compact=e=>({id:e.id,title:e.title,category:e.category,date:e.date,original:e.original.slice(0,1500),summary:e.summary,tags:e.tags});
+    if(task==='recommend'){
+     const question=clean(body.question,3000);if(!question)fail('자소서 문항을 입력해 주세요.');
+     const candidates=all.filter(e=>!body.category||e.category===body.category),records=candidates.slice(0,60).map(compact);
+     if(!records.length)fail('먼저 경험을 기록해 주세요.');
+     return json({...await ai(task,{question,records}),considered:records.length,total:candidates.length});
+    }
+    const semester=clean(body.semester,6);if(!/^\d{4}-[12]$/.test(semester))fail('학기를 확인해 주세요.');
+    const year=Number(semester.slice(0,4)),half=semester.slice(-1),previousSemester=half==='1'?(year-1)+'-2':year+'-1';
+    const semesterOf=d=>{const y=Number(d.slice(0,4)),m=Number(d.slice(5,7));return (m<3?y-1:y)+'-'+(m>=3&&m<=8?'1':'2');};
+    const current=all.filter(e=>semesterOf(e.date)===semester),previous=all.filter(e=>semesterOf(e.date)===previousSemester);
+    if(!current.length)fail('선택한 학기의 기록이 없어요.');
+    return json({...await ai(task,{semester,previousSemester,current:current.slice(0,30).map(compact),previous:previous.slice(0,30).map(compact)}),considered:{current:Math.min(30,current.length),previous:Math.min(30,previous.length)},total:{current:current.length,previous:previous.length}});
+   }
   if(p==='/api/profile'&&method==='PATCH'){
    const name=clean(body.name,30);if(!name)fail('이름을 입력해 주세요.');
    const cadence=Number(body.cadence);if(![1,7,30].includes(cadence))fail('기록 주기를 확인해 주세요.');
@@ -87,7 +116,9 @@ export async function handleApi(request,db,identity,{demo=false}={}) {
   if(p==='/api/entries'&&method==='POST'){
    const e=validateEntry(body);
    if(!await db.get('SELECT id FROM categories WHERE user_id=? AND name=?',[identity,e.category]))fail('카테고리를 먼저 추가해 주세요.');
-   const id=uid();await db.run('INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?)',[id,identity,e.title,e.category,e.date,e.original,JSON.stringify(summarize(e.original)),JSON.stringify(e.tags),now,now]);return json({id},201);
+    if(body.useAI&&!ai)fail('AI 연결이 설정되지 않았어요. 원문만 저장할 수 있어요.',503);
+    const summary=body.useAI?await ai('summary',e):summarize(e.original);
+    const id=uid();await db.run('INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?)',[id,identity,e.title,e.category,e.date,e.original,JSON.stringify(summary),JSON.stringify(e.tags),now,now]);return json({id},201);
   }
   if(p==='/api/import'&&method==='POST'){
    if(!Array.isArray(body.entries)||body.entries.length===0||body.entries.length>50)fail('한 번에 1개부터 50개까지 등록할 수 있어요.');
@@ -103,7 +134,9 @@ export async function handleApi(request,db,identity,{demo=false}={}) {
    if(method==='DELETE'){await db.run('DELETE FROM entries WHERE id=? AND user_id=?',[id,identity]);return json({ok:true});}
    const e=validateEntry(body);
    if(!await db.get('SELECT id FROM categories WHERE user_id=? AND name=?',[identity,e.category]))fail('카테고리를 먼저 추가해 주세요.');
-   await db.run('UPDATE entries SET title=?,category=?,date=?,original=?,summary=?,tags=?,updated_at=? WHERE id=? AND user_id=?',[e.title,e.category,e.date,e.original,JSON.stringify(summarize(e.original)),JSON.stringify(e.tags),now,id,identity]);return json({ok:true});
+    if(body.useAI&&!ai)fail('AI 연결이 설정되지 않았어요. 원문만 저장할 수 있어요.',503);
+    const summary=body.useAI?await ai('summary',e):summarize(e.original);
+    await db.run('UPDATE entries SET title=?,category=?,date=?,original=?,summary=?,tags=?,updated_at=? WHERE id=? AND user_id=?',[e.title,e.category,e.date,e.original,JSON.stringify(summary),JSON.stringify(e.tags),now,id,identity]);return json({ok:true});
   }
   if(p==='/api/categories'&&method==='POST'){
    const name=clean(body.name,40);if(!name)fail('카테고리 이름을 입력해 주세요.');

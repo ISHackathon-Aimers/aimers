@@ -5,7 +5,11 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {handleApi} from './src/api.mjs';
+import {createAI} from './src/ai.mjs';
+import {loadEnvFile} from 'node:process';
 const root=path.dirname(fileURLToPath(import.meta.url));
+if(existsSync(path.join(root,'.env')))loadEnvFile(path.join(root,'.env'));
+const ai=createAI({apiKey:process.env.DEEPSEEK_API_KEY,model:process.env.DEEPSEEK_MODEL||'deepseek-flash'});
 const dir=process.env.AIMERS_DATA_DIR||path.join(root,'.data');mkdirSync(dir,{recursive:true});
 const sqlite=new DatabaseSync(path.join(dir,'aimers.sqlite'));sqlite.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
 sqlite.exec(readFileSync(path.join(root,'drizzle/0000_aimers.sql'),'utf8'));
@@ -31,7 +35,7 @@ const server=createServer(async(req,res)=>{
   for await(const chunk of req){bytes+=chunk.length;if(bytes>300000){res.writeHead(413);res.end('Request too large');return;}chunks.push(chunk);}
   const headers=new Headers();for(const [k,v]of Object.entries(req.headers))if(typeof v==='string'&&!k.startsWith('oai-authenticated-user-'))headers.set(k,v);
   const request=new Request(url,{method:req.method,headers,body:['GET','HEAD'].includes(req.method)?undefined:Buffer.concat(chunks)});
-  const response=await handleApi(request,db,'local-'+sid,{demo:true});
+  const response=await handleApi(request,db,'local-'+sid,{demo:true,ai});
   res.writeHead(response.status,Object.fromEntries(response.headers));res.end(await response.text());return;
  }
  const name=url.pathname==='/'?'index.html':decodeURIComponent(url.pathname).replace(/^\//,'');
