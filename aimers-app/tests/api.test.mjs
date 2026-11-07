@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { handleApi,dateKey,streak,periodStart } from '../src/api.mjs';
 function fixture(options={}){
  const sql=new DatabaseSync(':memory:');sql.exec(readFileSync(new URL('../drizzle/0000_aimers.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../drizzle/0001_profiles.sql',import.meta.url),'utf8'));
  const db={get:async(q,a=[])=>sql.prepare(q).get(...a),all:async(q,a=[])=>sql.prepare(q).all(...a),run:async(q,a=[])=>sql.prepare(q).run(...a),batch:async(items)=>{sql.exec('BEGIN');try{for(const[q,a]of items)sql.prepare(q).run(...a);sql.exec('COMMIT')}catch(e){sql.exec('ROLLBACK');throw e;}}};
  const call=async(id,path,method='GET',body,extra={})=>{const request=new Request('https://aimers.test/api/'+path,{method,headers:{'content-type':'application/json',origin:'https://aimers.test',...extra},body:body===undefined?undefined:JSON.stringify(body)});const r=await handleApi(request,db,id,options);return{status:r.status,data:await r.json()};};
  return {db,call,close:()=>sql.close()};
@@ -68,7 +69,7 @@ test('category and profile updates persist and reject duplicates or unsupported 
  assert.equal((await f.call('a','categories','POST',{name:'공모전',color:'purple'})).status,201);
  assert.equal((await f.call('a','categories','POST',{name:'공모전'})).status,400);
  assert.equal((await f.call('a','profile','PATCH',{name:'테스터',cadence:7})).status,200);
- assert.equal((await f.call('a','profile','PATCH',{name:'테스터',cadence:99})).status,400);
+ assert.equal((await f.call('a','profile','PATCH',{name:'테스터',cadence:366})).status,400);
  const state=(await f.call('a','state')).data;assert.equal(state.me.name,'테스터');assert.ok(state.categories.some(c=>c.name==='공모전'&&c.color==='purple'));
  }finally{f.close()}
 });
@@ -110,5 +111,36 @@ test('AI recommendations and semester reports never include another users record
   assert.equal((await f.call('a','ai/report','POST',{semester:'2026-1'})).status,200);
   assert.equal(calls[0].data.records.length,1);assert.equal(calls[1].data.current.length,1);assert.equal(calls[1].data.previous.length,0);
   assert.equal(JSON.stringify(calls).includes('OTHER USER SECRET'),false);
+ }finally{f.close();}
+});
+
+test('public, shared-group and private records enforce server-side visibility',async()=>{
+ const f=fixture();try{
+  const publicEntry=await f.call('a','entries','POST',entry({title:'PUBLIC',visibility:'public'}));
+  await f.call('a','entries','POST',entry({title:'GROUP',visibility:'group'}));
+  await f.call('a','entries','POST',entry({title:'PRIVATE',visibility:'private'}));
+  await f.call('a','entries','POST',entry({title:'INHERITED'}));
+  const group=await f.call('a','groups','POST',{name:'그룹',period:7});await f.call('b','join','POST',{token:group.data.token});
+  assert.deepEqual((await f.call('c','users/a')).data.entries.map(e=>e.title),['PUBLIC']);
+  assert.deepEqual(new Set((await f.call('b','users/a')).data.entries.map(e=>e.title)),new Set(['PUBLIC','GROUP']));
+  assert.equal((await f.call('a','users/a')).data.entries.length,4);
+  assert.equal((await f.call('c','public')).data.entries.length,1);
+  await f.call('a','profile','PATCH',{name:'공개 사용자',cadence:14,start_date:'2026-01-01',visibility:'public'});
+  assert.equal((await f.call('c','users/a')).data.entries.length,2);
+  await f.call('a','entries/'+publicEntry.data.id,'PATCH',entry({title:'NOW PRIVATE',visibility:'private'}));
+  assert.equal((await f.call('c','public')).data.entries.some(e=>e.id===publicEntry.data.id),false);
+  assert.equal((await f.call('b','entries/'+publicEntry.data.id,'DELETE',{})).status,404);
+  assert.equal((await f.call('b','ai/interview','POST',{entryId:publicEntry.data.id})).status,503);
+  await f.db.run('DELETE FROM members WHERE group_id=? AND user_id=?',[group.data.id,'b']);
+  assert.equal((await f.call('b','users/a')).data.entries.some(e=>e.title==='GROUP'),false);
+ }finally{f.close();}
+});
+test('profile settings validate photo types, cadence and dates; completed members cannot be poked',async()=>{
+ const f=fixture();try{
+  for(const changes of [{avatar:'https://tracking.test/a'},{avatar:'data:image/svg+xml;base64,AAAA'},{start_date:'2026-02-30'},{cadence:0},{font_size:99},{visibility:'everyone'}]){
+   assert.equal((await f.call('a','profile','PATCH',{name:'A',cadence:7,...changes})).status,400);
+  }
+  const g=await f.call('a','groups','POST',{name:'G',period:7});await f.call('b','join','POST',{token:g.data.token});await f.call('b','entries','POST',entry());
+  assert.equal((await f.call('a','poke','POST',{groupId:g.data.id,userId:'b'})).status,400);
  }finally{f.close();}
 });

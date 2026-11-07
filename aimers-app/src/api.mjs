@@ -1,3 +1,4 @@
+import {recordingProgress,validDate} from './periods.mjs';
 export const DAY = 86400000;
 export function dateKey(value = new Date()) { return new Date(value).toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' }); }
 export function periodStart(period, now = new Date()) {
@@ -30,14 +31,15 @@ function validateEntry(data) {
  if(original.length>20000)fail('활동 내용은 20,000자까지 저장할 수 있어요.');
  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date))||new Date(date).toISOString().slice(0,10)!==date||date>dateKey())fail('활동 날짜를 확인해 주세요. 미래 날짜는 기록할 수 없어요.');
  const tags=(Array.isArray(data.tags)?data.tags:[]).map(t=>clean(t,20)).filter(Boolean).slice(0,6);
- return {title,category,original,date,tags};
+ const visibility=data.visibility??'inherit';if(!['inherit','private','group','public'].includes(visibility))fail('공개 범위를 확인해 주세요.');
+ return {title,category,original,date,tags,visibility};
 }
 function entryView(e){return {...e,summary:JSON.parse(e.summary),tags:JSON.parse(e.tags)}}
 const defaults=[['대외활동','blue'],['프로젝트','purple'],['동아리','mint'],['인턴십','orange'],['학업','pink']];
 async function ensureUser(db,id,demo) {
  if(await db.get('SELECT id FROM users WHERE id=?',[id]))return;
  const now=new Date().toISOString();
- await db.run('INSERT OR IGNORE INTO users(id,name,created_at) VALUES(?,?,?)',[id,demo?'지민':'에이머',now]);
+ await db.run('INSERT OR IGNORE INTO users(id,name,created_at,start_date) VALUES(?,?,?,?)',[id,demo?'지민':'에이머',now,dateKey()]);
  for(const [name,color] of defaults)await db.run('INSERT OR IGNORE INTO categories(id,user_id,name,color) VALUES(?,?,?,?)',[uid(),id,name,color]);
  if(demo)await seed(db,id);
 }
@@ -54,7 +56,7 @@ async function seed(db,id){
  ];
  for(const [title,category,ago,original,tags] of samples){
  const created=new Date(Date.now()-ago*DAY).toISOString();
- await db.run('INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?)',['sample-'+uid(),id,title,category,dateKey(created),original,JSON.stringify(summarize(original)),JSON.stringify(tags),created,created]);
+ await db.run('INSERT INTO entries(id,user_id,title,category,date,original,summary,tags,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',['sample-'+uid(),id,title,category,dateKey(created),original,JSON.stringify(summarize(original)),JSON.stringify(tags),created,created]);
  }
 }
 export async function handleApi(request,db,identity,{demo=false,ai=null}={}) {
@@ -75,11 +77,25 @@ export async function handleApi(request,db,identity,{demo=false,ai=null}={}) {
    const groups=await db.all('SELECT g.* FROM groups g JOIN members m ON m.group_id=g.id WHERE m.user_id=? ORDER BY g.created_at DESC',[identity]);
    for(const g of groups){
     g.start=periodStart(g.period);g.members=await db.all('SELECT u.id,u.name,m.joined_at FROM members m JOIN users u ON u.id=m.user_id WHERE m.group_id=? ORDER BY m.joined_at',[g.id]);
-    for(const m of g.members){const recent=await db.all('SELECT created_at,date FROM entries WHERE user_id=? ORDER BY created_at DESC',[m.id]);m.done=recent.some(e=>dateKey(e.created_at)>=g.start);m.streak=streak(recent);}
+    for(const m of g.members){const profile=await db.get('SELECT * FROM users WHERE id=?',[m.id]);const recent=await db.all('SELECT created_at,date FROM entries WHERE user_id=? ORDER BY created_at DESC',[m.id]);m.progress=recordingProgress(recent,profile);m.done=m.progress.done;m.streak=m.progress.count;m.avatar=profile.avatar;m.cadence=profile.cadence;}
    }
    const notifications=await db.all('SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50',[identity]);
-    return json({me,entries,categories,groups,notifications,mode:demo?'local':'hosted',today:dateKey(),streak:streak(entries),aiEnabled:!!ai});
+    return json({me:{...me,start_date:me.start_date||dateKey(me.created_at)},entries,categories,groups,notifications,mode:demo?'local':'hosted',today:dateKey(),streak:streak(entries),progress:recordingProgress(entries,me),aiEnabled:!!ai});
   }
+   if(p==='/api/public'&&method==='GET'){
+    const offset=Number(url.searchParams.get('offset')||0);if(!Number.isInteger(offset)||offset<0)fail('페이지를 확인해 주세요.');
+    const rows=await db.all("SELECT e.*,u.name AS author_name,u.avatar AS author_avatar FROM entries e JOIN users u ON u.id=e.user_id WHERE (CASE WHEN e.visibility='inherit' THEN u.visibility ELSE e.visibility END)='public' ORDER BY e.created_at DESC,e.id LIMIT 31 OFFSET ?",[offset]);
+    return json({entries:rows.slice(0,30).map(entryView),hasMore:rows.length>30});
+   }
+   if(p.startsWith('/api/users/')&&method==='GET'){
+    const id=p.slice('/api/users/'.length),profile=await db.get('SELECT * FROM users WHERE id=?',[id]);if(!profile)fail('프로필을 찾을 수 없어요.',404);
+    const shared=await db.get('SELECT a.group_id FROM members a JOIN members b ON a.group_id=b.group_id WHERE a.user_id=? AND b.user_id=? LIMIT 1',[identity,id]);
+    const all=await db.all('SELECT * FROM entries WHERE user_id=? ORDER BY date DESC,created_at DESC',[id]);
+    const visible=all.filter(e=>{const scope=e.visibility==='inherit'?profile.visibility:e.visibility;return id===identity||scope==='public'||(scope==='group'&&!!shared);});
+    if(id!==identity&&!shared&&!visible.length)fail('열람할 수 있는 공개 기록이 없어요.',404);
+    const progress=id===identity||shared?recordingProgress(all,profile):null;
+    return json({profile:{id,name:profile.name,avatar:profile.avatar},progress,entries:visible.map(entryView),isOwner:id===identity,sharedGroup:!!shared});
+   }
    if(p.startsWith('/api/ai/')&&method==='POST'){
     if(!ai)fail('AI 연결이 설정되지 않았어요. 원문 기록은 계속 사용할 수 있어요.',503);
     const task=p.slice('/api/ai/'.length);
@@ -110,22 +126,27 @@ export async function handleApi(request,db,identity,{demo=false,ai=null}={}) {
    }
   if(p==='/api/profile'&&method==='PATCH'){
    const name=clean(body.name,30);if(!name)fail('이름을 입력해 주세요.');
-   const cadence=Number(body.cadence);if(![1,7,30].includes(cadence))fail('기록 주기를 확인해 주세요.');
-   await db.run('UPDATE users SET name=?,cadence=? WHERE id=?',[name,cadence,identity]);return json({ok:true});
+    const cadence=Number(body.cadence);if(!Number.isInteger(cadence)||cadence<1||cadence>365)fail('기록 주기는 1~365일로 설정해 주세요.');
+    const start=body.start_date??me.start_date??dateKey(me.created_at),visibility=body.visibility??me.visibility,font=body.font??me.font,fontSize=Number(body.font_size??me.font_size),avatar=body.avatar??me.avatar;
+    if(!validDate(start))fail('시작 날짜를 확인해 주세요.');
+    if(!['private','group','public'].includes(visibility))fail('공개 범위를 확인해 주세요.');
+    if(!['sans','serif','system'].includes(font)||![14,16,18,20].includes(fontSize))fail('글꼴 설정을 확인해 주세요.');
+    if(typeof avatar!=='string'||avatar.length>120000||(avatar&&!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/.test(avatar)))fail('프로필 사진을 다시 선택해 주세요.');
+    await db.run('UPDATE users SET name=?,cadence=?,start_date=?,visibility=?,avatar=?,font=?,font_size=? WHERE id=?',[name,cadence,start,visibility,avatar,font,fontSize,identity]);return json({ok:true});
   }
   if(p==='/api/entries'&&method==='POST'){
    const e=validateEntry(body);
    if(!await db.get('SELECT id FROM categories WHERE user_id=? AND name=?',[identity,e.category]))fail('카테고리를 먼저 추가해 주세요.');
     if(body.useAI&&!ai)fail('AI 연결이 설정되지 않았어요. 원문만 저장할 수 있어요.',503);
     const summary=body.useAI?await ai('summary',e):summarize(e.original);
-    const id=uid();await db.run('INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?)',[id,identity,e.title,e.category,e.date,e.original,JSON.stringify(summary),JSON.stringify(e.tags),now,now]);return json({id},201);
+    const id=uid();await db.run('INSERT INTO entries(id,user_id,title,category,date,original,summary,tags,created_at,updated_at,visibility) VALUES(?,?,?,?,?,?,?,?,?,?,?)',[id,identity,e.title,e.category,e.date,e.original,JSON.stringify(summary),JSON.stringify(e.tags),now,now,e.visibility]);return json({id},201);
   }
   if(p==='/api/import'&&method==='POST'){
    if(!Array.isArray(body.entries)||body.entries.length===0||body.entries.length>50)fail('한 번에 1개부터 50개까지 등록할 수 있어요.');
    const entries=body.entries.map(validateEntry);const statements=[];
    for(const e of entries){
     statements.push(['INSERT OR IGNORE INTO categories(id,user_id,name,color) VALUES(?,?,?,?)',[uid(),identity,e.category,'blue']]);
-    statements.push(['INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?)',[uid(),identity,e.title,e.category,e.date,e.original,JSON.stringify(summarize(e.original)),JSON.stringify(e.tags),now,now]]);
+     statements.push(['INSERT INTO entries(id,user_id,title,category,date,original,summary,tags,created_at,updated_at,visibility) VALUES(?,?,?,?,?,?,?,?,?,?,?)',[uid(),identity,e.title,e.category,e.date,e.original,JSON.stringify(summarize(e.original)),JSON.stringify(e.tags),now,now,e.visibility]]);
    }
    await db.batch(statements);return json({count:entries.length},201);
   }
@@ -136,7 +157,7 @@ export async function handleApi(request,db,identity,{demo=false,ai=null}={}) {
    if(!await db.get('SELECT id FROM categories WHERE user_id=? AND name=?',[identity,e.category]))fail('카테고리를 먼저 추가해 주세요.');
     if(body.useAI&&!ai)fail('AI 연결이 설정되지 않았어요. 원문만 저장할 수 있어요.',503);
     const summary=body.useAI?await ai('summary',e):summarize(e.original);
-    await db.run('UPDATE entries SET title=?,category=?,date=?,original=?,summary=?,tags=?,updated_at=? WHERE id=? AND user_id=?',[e.title,e.category,e.date,e.original,JSON.stringify(summary),JSON.stringify(e.tags),now,id,identity]);return json({ok:true});
+    await db.run('UPDATE entries SET title=?,category=?,date=?,original=?,summary=?,tags=?,updated_at=?,visibility=? WHERE id=? AND user_id=?',[e.title,e.category,e.date,e.original,JSON.stringify(summary),JSON.stringify(e.tags),now,e.visibility,id,identity]);return json({ok:true});
   }
   if(p==='/api/categories'&&method==='POST'){
    const name=clean(body.name,40);if(!name)fail('카테고리 이름을 입력해 주세요.');
@@ -158,6 +179,8 @@ export async function handleApi(request,db,identity,{demo=false,ai=null}={}) {
   if(p==='/api/poke'&&method==='POST'){
    const g=await db.get('SELECT g.* FROM groups g JOIN members m ON g.id=m.group_id WHERE g.id=? AND m.user_id=?',[body.groupId,identity]);if(!g)fail('참여한 그룹에서만 콕 찌를 수 있어요.',403);
    if(body.userId===identity||!await db.get('SELECT user_id FROM members WHERE group_id=? AND user_id=?',[g.id,body.userId]))fail('그룹 멤버를 확인해 주세요.');
+    const target=await db.get('SELECT * FROM users WHERE id=?',[body.userId]),recent=await db.all('SELECT created_at FROM entries WHERE user_id=?',[body.userId]),progress=recordingProgress(recent,target);
+    if(progress.done||progress.scheduled)fail('현재 기록을 기다리는 멤버에게만 콕 찌를 수 있어요.');
    const cutoff=new Date(Date.now()-DAY).toISOString();
    if(await db.get('SELECT id FROM notifications WHERE user_id=? AND actor_id=? AND group_id=? AND created_at>?',[body.userId,identity,g.id,cutoff]))fail('이 멤버에게는 하루에 한 번 콕 찌를 수 있어요.',429);
    await db.run('INSERT INTO notifications VALUES(?,?,?,?,?,?,?)',[uid(),body.userId,identity,g.id,me.name+'님이 '+g.name+'에서 기록을 기다리고 있어요.',0,now]);return json({ok:true});

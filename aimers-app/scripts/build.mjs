@@ -1,5 +1,5 @@
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
-const api=(await readFile('src/ai.mjs','utf8'))+'\n'+await readFile('src/api.mjs','utf8');
+const api=(await readFile('src/periods.mjs','utf8'))+'\n'+(await readFile('src/ai.mjs','utf8'))+'\n'+(await readFile('src/api.mjs','utf8')).replace("import {recordingProgress,validDate} from './periods.mjs';",'');
 const assets={};for(const [name,type]of [['index.html','text/html'],['style.css','text/css'],['app.js','text/javascript'],['favicon.svg','image/svg+xml']])assets[name]={body:await readFile('public/'+name,'utf8'),type};
 const worker=api+'\nconst assets='+JSON.stringify(assets)+';\n'+`
 export default {async fetch(request,env){
