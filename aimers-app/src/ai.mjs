@@ -1,7 +1,7 @@
 const instructions={
  reflect:'경험의 상황·본인 행동·결과 중 부족한 정보를 찾아 가장 유용한 꼬리질문을 하나만 하세요. 이미 답한 질문은 반복하지 말고 충분하면 question은 빈 문자열입니다. summary는 현재 원문에 있는 사실만 정리합니다. JSON: {"question":"질문 또는 빈 문자열","summary":{"context":"상황","action":"본인 행동","result":"결과"}}',
  summary:'경험을 상황·본인 행동·결과로 간결하게 정리하세요. 근거 없는 항목은 빈 문자열로 둡니다. JSON: {"context":"상황","action":"본인 행동","result":"결과"}',
- interview:'제공된 경험과 카테고리에 구체적으로 연결되는 면접 예상 질문 3개와 각 질문의 의도를 작성하세요. 입력에 없는 성과를 전제하지 마세요. JSON: {"questions":[{"question":"질문","intent":"확인하려는 역량과 이유"}]}',
+ interview:'제공된 경험과 카테고리에 구체적으로 연결되는 면접 예상 질문 3개와 각 질문의 의도를 작성하세요. 입력에 없는 성과를 전제하지 마세요. 기록에 없는 갈등이나 후속 경험은 있었는지 먼저 묻거나 있었다면이라는 조건형으로 질문하세요. JSON: {"questions":[{"question":"질문","intent":"확인하려는 역량과 이유"}]}',
  recommend:'자소서 문항에 적합한 경험을 제공된 records에서 최대 3개 고르세요. 각 추천에 실제 기록에 근거한 이유와 작성 시 강조할 부분을 적으세요. 관련 경험이 없으면 빈 배열입니다. id는 반드시 입력의 id를 그대로 사용합니다. JSON: {"recommendations":[{"id":"입력 id","reason":"문항과 연결되는 근거","angle":"강조할 내용"}]}',
  report:'current와 previous 학기의 기록을 비교하세요. 기록의 차이를 능력 향상으로 단정하지 마세요. 이전 기록이 없으면 비교 불가를 명시하세요. 관찰마다 입력 record id를 근거로 남기세요. JSON: {"overview":"이번 학기 요약","changes":[{"observation":"관찰한 변화","evidenceIds":["입력 id"]}],"nextSteps":["다음에 기록하면 좋을 내용"]}'
 };
