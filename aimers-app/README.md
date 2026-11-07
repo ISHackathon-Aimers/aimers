@@ -71,7 +71,9 @@ node --check dist/server/index.js
 
 테스트는 AI 오류/응답 검증, 원문 보존, 사용자별 AI 데이터 분리, 공개 범위, 기간 경계와 월말·윤년, SQLite 마이그레이션·기존 쿠키 호환을 포함합니다.
 
-빌드는 네 개의 정적 에셋과 API를 단일 Worker `dist/server/index.js`로 묶습니다. 실제 배포에는 기존 `.openai/hosting.json` 설정, D1의 `0000_aimers.sql`과 `0001_profiles.sql` 순서 적용, Worker secret `DEEPSEEK_API_KEY` 설정이 필요합니다. 이 변경에서 외부 배포는 수행하지 않았습니다.
+기본 고딕 글꼴은 Pretendard Variable 1.3.9이며 `public/fonts/PretendardVariable.woff2`에서 직접 제공합니다. OFL 라이선스는 같은 폴더의 `OFL.txt`에 보존합니다. 외부 폰트 CDN 요청 없이 로컬 서버와 Worker가 같은 파일을 제공합니다.
+
+빌드는 글꼴과 라이선스를 포함한 여섯 개의 정적 에셋과 API를 단일 Worker `dist/server/index.js`로 묶습니다. 실제 배포에는 기존 `.openai/hosting.json` 설정, D1의 `0000_aimers.sql`과 `0001_profiles.sql` 순서 적용, Worker secret `DEEPSEEK_API_KEY` 설정이 필요합니다. 이 변경에서 외부 배포는 수행하지 않았습니다.
 
 ## 남아 있는 범위
 

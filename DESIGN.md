@@ -1,4 +1,47 @@
+---
+name: AIMers
+description: 대학생의 경험 기록과 회고를 위한 웹 앱
+colors:
+  primary: "#2768d8"
+  ink: "#202c3c"
+  muted: "#606c7e"
+  background: "#f7f8fb"
+  surface: "#ffffff"
+  border: "#e3e8ef"
+typography:
+  heading:
+    fontFamily: "Pretendard, Apple SD Gothic Neo, Malgun Gothic, sans-serif"
+    fontSize: "1.875rem"
+    fontWeight: 700
+    lineHeight: 1.4
+    letterSpacing: "-0.035em"
+  body:
+    fontFamily: "Pretendard, Apple SD Gothic Neo, Malgun Gothic, sans-serif"
+    fontSize: "1rem"
+    fontWeight: 400
+    lineHeight: 1.65
+    letterSpacing: "-0.015em"
+rounded:
+  field: "8px"
+  button: "9px"
+  card: "14px"
+  capture: "16px"
+components:
+  button-primary:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.surface}"
+    rounded: "{rounded.button}"
+    padding: "11px 16px"
+  input:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.field}"
+    padding: "12px"
+---
+
 # AIMers UI/UX 방향 및 검증 기준
+
+이 문서는 기존 방향에 현재 구현을 병합한 기록이다. 제품 요구사항은 `PRODUCT.md`에 정리한다. 아래 값은 현재 구현의 기준이며 이전 CSS를 고정하거나 개선 범위를 제한하는 규칙이 아니다. 구현이 바뀌면 함께 갱신한다.
 
 ## 확정된 방향
 
@@ -21,11 +64,16 @@
 
 ## 화면 규칙
 
-- 색상: 배경 #f5f7fa, 본문 #172b45, 보조 #596b80, 주요 액션 #2466d7.
-- 고딕 기본, 명조/시스템 글꼴과 14/16/18/20px 기본 크기 선택. 주요 컴포넌트는 rem 단위로 함께 확대한다.
-- 카드 14px 반경, 1px 테두리, SVG 선 아이콘. 프로필 불꽃은 연속 기록 성취를 표시한다.
+- 색상: 배경 #f7f8fb, 본문 #202c3c, 보조 #606c7e, 주요 액션 #2768d8, 경계 #e3e8ef, 작업 면 #ffffff. `aimers-app/public/style.css`의 현재 토큰을 따른다.
+- 기본 고딕은 로컬 Pretendard Variable 1.3.9이며 `public/fonts/PretendardVariable.woff2`와 OFL 라이선스를 함께 제공한다. 명조/시스템 글꼴과 14/16/18/20px 기본 크기를 선택할 수 있고 주요 컴포넌트는 rem 단위로 함께 확대한다.
+- 페이지 제목은 1.875rem/700, 기본 본문은 1rem/행간 1.65, 버튼은 .875rem/600이다. 모바일 페이지 제목은 1.5rem이다. 한국어 제목은 단어 단위 줄바꿈을 우선한다.
+- 일반 카드 14px, 직접 입력·회고 영역 16px, 버튼 9px, 필드 8px 반경과 SVG 선 아이콘을 사용한다. 일반 카드는 1px 테두리로 구분하고 모달에만 부드러운 그림자를 쓴다. 프로필 불꽃은 연속 기록 성취를 표시한다.
+- 대시보드의 경험 입력을 주 작업으로 두고 개인 주기의 회고를 별도 영역에 표시한다. 직접 입력한 경험은 같은 초안으로 편집기에 이어진다.
 - AI는 버튼으로 실행하며 자동 유료 호출을 하지 않는다. 대기 시 중복 입력을 막고 닫기로 분석을 취소할 수 있다.
-- 기록 작성 모달은 집중을 위한 편집 영역이다. 원문과 정리를 PC에서 나란히, 모바일에서 세로로 배치한다.
+- 기록 작성 모달은 원문과 질문·답변을 먼저, 제목·카테고리·날짜·태그를 그 뒤에 둔다. 정리 미리보기는 넓은 화면에서 옆에, 900px 이하에서는 아래에 배치한다. 공개 범위와 원문 공유 안내는 저장 버튼 곁에 둔다.
+- 원문 변경 시 답하지 않은 이전 AI 질문은 폐기한다. 이미 작성한 답변은 이전 질문에 대한 것임을 알리고 보존하며, 미리보기도 변경된 원문을 반영한다.
+- 서비스 설명·실행 버튼·구체적인 예시를 같은 영역에 둔다. 1100px 이하에서는 예시가 설명 아래로 이동한다.
+- 내 기록의 카테고리와 정리본/원본 선택은 `aria-pressed`, 주 메뉴는 `aria-current`로 상태를 전달한다. 720px 이하에서는 네 탭이 하단 메뉴로 이동하며 프로필은 우측 상단에 남는다.
 - 빈 상태에는 다음 행동을 제시한다. 미작성은 색상과 글자를 함께 표시하고 마감 전/마감 후를 구분한다.
 - 모달의 배경은 inert 처리하고 Escape·Tab 포커스 순환을 지원한다. 모션 감소 설정을 따른다.
 
@@ -34,6 +82,8 @@
 로컬은 체험 인증이고, 전체 공개는 현재 서비스의 사용자들에게만 적용된다. 외부 서비스 배포, 앱 종료 상태의 예약 알림, 계정 복구는 별도의 운영 작업이다. 추천·학기 분석의 입력 범위와 임시 답변 보존 범위를 화면과 README에 명시한다.
 
 ## 구현 후 검증 — 2026-11-07
+
+다음은 이전 구현 당시의 검증 기록이다. 이번 문서 갱신이나 이후 코드 변경을 다시 검증했다는 뜻은 아니다. 위 계획 평가와 구현 단계도 당시의 구현 계획을 보존한 것이다.
 
 - 자동 테스트 19개 통과. 주기 경계·윤년, 공개 권한, AI 입력 격리와 실패 시 원문 보존, 기존 DB·쿠키 이전을 확인했다.
 - 프런트엔드와 Worker 문법 검사, 배포 빌드, Git 공백 검사를 통과했다.
