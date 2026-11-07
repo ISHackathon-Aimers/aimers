@@ -1,11 +1,9 @@
 @echo off
-setlocal
-cd /d "%~dp0"
+cd /d "%~dp0aimers-app"
 where node >nul 2>nul
-if errorlevel 1 (
-  echo Node.js 24 or later is required. Install Node.js and reopen this launcher.
-  pause
-  exit /b 1
+if %errorlevel% equ 0 (
+  node server.mjs
+) else (
+  "%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe" server.mjs
 )
-node server.mjs
-if errorlevel 1 pause
+pause
