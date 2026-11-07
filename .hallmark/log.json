@@ -1,0 +1,20 @@
+[
+  {
+    "date": "2026-11-08",
+    "scope": "app",
+    "redesign": "full",
+    "shape": "app screen",
+    "theme": "AIMers brand",
+    "genre": "modern-minimal",
+    "axes": {"energy": 2, "rhythm": 2, "motion": 1},
+    "nav": "existing four-tab sidebar and mobile bottom navigation",
+    "imagery": "existing profile initials or user photo",
+    "entry": "inline experience capture",
+    "fingerprint": "paper input, personal cadence, dated record rows",
+    "signature": "dated experience notebook",
+    "waived": [],
+    "prompt": "Apply Taste Skill, Hallmark and Anti-Slop during the AIMers redesign; commit stages and open comparison pages.",
+    "omitted": {"hero": "app scope", "footer": "existing app shell", "photos": "no new stock assets", "sections": "working screens, not a marketing page"},
+    "verification": {"staticFloorFailures": 0, "staticWarnings": 6, "finishReview": "subagent, four fixes resolved", "automatedTests": 19, "render": "CUA browser review; no automated render-tier claim"}
+  }
+]

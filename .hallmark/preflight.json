@@ -1,0 +1,16 @@
+{
+  "scanned": "2026-11-08",
+  "baseline": "c69d35d",
+  "scope": "app",
+  "findings": {
+    "fonts": "Local Pretendard Variable with user-selected serif/system alternatives; aimers-app/public/style.css:3",
+    "palette": "AIMers blue, paper and neutral surfaces; aimers-app/public/style.css:4",
+    "motion": "CSS control feedback with reduced-motion support; no animation library",
+    "spacing": "Existing rem typography and responsive sidebar; four-tab app shell in aimers-app/public/app.js:65",
+    "framework": "Vanilla JavaScript modules, Node server and SQLite; aimers-app/package.json",
+    "product": "Experience journal with personal-cadence reflection, AI tools and visibility controls; PRODUCT.md"
+  },
+  "preserve": ["four tab destinations", "existing data and API wiring", "raw and summarized entry views", "font preferences", "cadence and visibility behavior"],
+  "introduce": ["date-led notebook rows", "visible inline capture label", "simplified service rows", "role-based tokens", "skip link", "stronger field and focus edges"],
+  "note": "Existing visual choices are descriptive, not user-locked design constraints. Cache records the decisions of this run; source citations point to the resulting files."
+}
