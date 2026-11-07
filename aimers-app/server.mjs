@@ -31,7 +31,7 @@ export const db={
 };
 const port=Number(process.env.PORT||4173);
 const allowedHosts=new Set(['127.0.0.1:'+port,'localhost:'+port]);
-const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml'};
+const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.woff2':'font/woff2','.txt':'text/plain; charset=utf-8'};
 const server=createServer(async(req,res)=>{
  try{
  if(!allowedHosts.has(req.headers.host)){res.writeHead(403);res.end('Local preview only');return;}
