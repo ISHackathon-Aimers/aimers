@@ -8,3 +8,4 @@ dist/
 *.log
 *.tar.gz
 .tools/
+/Claude-design/
