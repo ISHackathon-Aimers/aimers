@@ -7,6 +7,7 @@ import { handleApi,dateKey,streak,periodStart } from '../src/api.mjs';
 function fixture(options={}){
  const sql=new DatabaseSync(':memory:');sql.exec(readFileSync(new URL('../drizzle/0000_aimers.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../drizzle/0001_profiles.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../drizzle/0002_record_workflows.sql',import.meta.url),'utf8'));
  const db={get:async(q,a=[])=>sql.prepare(q).get(...a),all:async(q,a=[])=>sql.prepare(q).all(...a),run:async(q,a=[])=>sql.prepare(q).run(...a),batch:async(items)=>{sql.exec('BEGIN');try{for(const[q,a]of items)sql.prepare(q).run(...a);sql.exec('COMMIT')}catch(e){sql.exec('ROLLBACK');throw e;}}};
  const call=async(id,path,method='GET',body,extra={})=>{const request=new Request('https://aimers.test/api/'+path,{method,headers:{'content-type':'application/json',origin:'https://aimers.test',...extra},body:body===undefined?undefined:JSON.stringify(body)});const r=await handleApi(request,db,id,options);return{status:r.status,data:await r.json()};};
  return {db,call,close:()=>sql.close()};
@@ -142,5 +143,51 @@ test('profile settings validate photo types, cadence and dates; completed member
   }
   const g=await f.call('a','groups','POST',{name:'G',period:7});await f.call('b','join','POST',{token:g.data.token});await f.call('b','entries','POST',entry());
   assert.equal((await f.call('a','poke','POST',{groupId:g.data.id,userId:'b'})).status,400);
+ }finally{f.close();}
+});
+
+test('quick memos persist without a title or AI and reflection answers never replace their source',async()=>{
+ const f=fixture();try{
+  const memo=await f.call('a','entries','POST',{kind:'memo',original:'시연에서 검색 버튼을 못 찾는 사용자를 관찰했다.'});assert.equal(memo.status,201);
+  let records=(await f.call('a','state')).data.entries;assert.equal(records[0].kind,'memo');assert.match(records[0].title,/시연/);assert.equal(records[0].summary.source,'extractive');
+  const original=records[0].original;
+  const saved=await f.call('a','entries','POST',entry({kind:'reflection',periodStart:dateKey(),periodEnd:dateKey(),sourceIds:[memo.data.id],conversation:[{question:'검색 버튼 위치를 어떻게 바꾸려고 하나요?',answer:'관찰한 동선을 기준으로 배치를 바꿔 테스트한다.',focus:'next-step',evidenceIds:[memo.data.id]}]}));assert.equal(saved.status,201);
+  records=(await f.call('a','state')).data.entries;const review=records.find(e=>e.kind==='reflection');assert.deepEqual(review.sourceIds,[memo.data.id]);assert.equal(review.conversation[0].answer,'관찰한 동선을 기준으로 배치를 바꿔 테스트한다.');assert.equal(records.find(e=>e.id===memo.data.id).original,original);
+  assert.equal((await f.call('a','entries/'+review.id,'PATCH',{original:'새롭게 돌아본 내용'})).status,200);assert.equal((await f.call('a','state')).data.entries.find(e=>e.id===review.id).kind,'reflection');
+  assert.equal((await f.call('a','entries','POST',{kind:'memo',original:'x'.repeat(2001)})).status,400);
+ }finally{f.close();}
+});
+test('review AI receives only selected owned period notes and conversation, rejecting foreign or out-of-period notes',async()=>{
+ const calls=[],f=fixture({ai:async(task,data)=>{calls.push({task,data});return {questions:[],summary:{}};}});try{
+  const own=await f.call('a','entries','POST',{kind:'memo',original:'사용자 3명의 검색 과정을 관찰했다.'});
+  const foreign=await f.call('b','entries','POST',{kind:'memo',original:'OTHER USER PRIVATE NOTE'});
+  const stale=await f.call('a','entries','POST',entry({date:'2020-01-01'}));
+  const request={sourceIds:[own.data.id],periodStart:dateKey(),periodEnd:dateKey(),original:'',conversation:[{question:'관찰 방법은?',answer:'화면 녹화로 확인했다.',evidenceIds:[own.data.id]}],previousQuestions:[{question:'관찰 방법은?',focus:'evidence'}]};
+  assert.equal((await f.call('a','ai/review','POST',request)).status,200);assert.equal(calls[0].task,'review');assert.equal(calls[0].data.records.length,1);assert.equal(calls[0].data.original,'');assert.match(calls[0].data.conversation[0].answer,/녹화/);
+  assert.equal((await f.call('a','ai/review','POST',{...request,sourceIds:[foreign.data.id]})).status,404);
+  assert.equal((await f.call('a','ai/review','POST',{...request,sourceIds:[stale.data.id]})).status,400);
+  assert.equal((await f.call('a','ai/review','POST',{...request,sourceIds:[]})).status,400);
+  assert.equal((await f.call('a','ai/review','POST',{...request,periodStart:'2026-02-30'})).status,400);
+  assert.equal((await f.call('a','entries','POST',entry({kind:'reflection',periodStart:dateKey(),periodEnd:dateKey(),sourceIds:[foreign.data.id]}))).status,404);
+  assert(!JSON.stringify(calls).includes('OTHER USER PRIVATE NOTE'));
+ }finally{f.close();}
+});
+test('reflection imports remap source note ids without copying or exposing another users private records',async()=>{
+ const f=fixture();try{
+  const memo=await f.call('a','entries','POST',{kind:'memo',original:'발표 리허설에서 질문 2개에 답하지 못했다.'});
+  await f.call('a','entries','POST',entry({kind:'reflection',periodStart:dateKey(),periodEnd:dateKey(),sourceIds:[memo.data.id],conversation:[{question:'준비 방식은?',answer:'예상 질문을 묶어 연습했다.',evidenceIds:[memo.data.id]}]}));
+  const exported=(await f.call('a','state')).data.entries;
+  assert.equal((await f.call('b','import','POST',{entries:exported})).status,201);
+  const restored=(await f.call('b','state')).data.entries,restoredMemo=restored.find(e=>e.kind==='memo'),review=restored.find(e=>e.kind==='reflection');assert.notEqual(restoredMemo.id,memo.data.id);assert.deepEqual(review.sourceIds,[restoredMemo.id]);assert.deepEqual(review.conversation[0].evidenceIds,[restoredMemo.id]);
+  assert.equal((await f.call('c','import','POST',{entries:[exported.find(e=>e.kind==='reflection')]})).status,404);assert.equal((await f.call('c','state')).data.entries.length,0);
+ }finally{f.close();}
+});
+test('interview requests carry role, focus and previous questions while disallowing other users records',async()=>{
+ const calls=[],f=fixture({ai:async(task,data)=>{calls.push(data);return {questions:[]};}});try{
+  const saved=await f.call('a','entries','POST',entry());
+  const request={entryId:saved.data.id,targetRole:'서비스 기획',focus:'decision',previousQuestions:[{question:'이전 질문',focus:'ownership'}]};
+  assert.equal((await f.call('a','ai/interview','POST',request)).status,200);assert.equal(calls[0].targetRole,'서비스 기획');assert.equal(calls[0].focus,'decision');assert.equal(calls[0].previousQuestions[0].question,'이전 질문');
+  assert.equal((await f.call('b','ai/interview','POST',request)).status,404);
+  const state=(await f.call('a','state')).data;assert.equal(state.interviewReferences.length,3);assert.equal(state.questionFocuses.length,10);
  }finally{f.close();}
 });

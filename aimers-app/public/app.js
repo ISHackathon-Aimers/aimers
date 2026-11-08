@@ -35,13 +35,16 @@ trophy:'<path d="M7 3h10v7a5 5 0 0 1-10 0zM7 5H3v3a4 4 0 0 0 4 4m10-7h4v3a4 4 0 
 };
 const icon=(name,cls='')=>'<svg class="icon '+cls+'" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+(icons[name]||icons.file)+'</svg>';
 let state,view=location.hash.slice(1)||'dashboard',filter='전체',query='',sort='newest',dialogFocus,toastTimer,speech,importRows=[],busy=false;
-const titles={dashboard:'대시보드',library:'내 기록',groups:'내 그룹',insights:'부가 서비스',settings:'프로필 및 설정'};
+const titles={dashboard:'내 대시보드',library:'경험 보관함',groups:'함께 기록',insights:'성장 인사이트',settings:'프로필 및 설정'};
+let kindFilter='all',editorContext=null;
+const kindLabel={memo:'빠른 메모',reflection:'회고',experience:'경험 기록'};
 let selectedGroup=null,aiController=null,profileAvatar=null,sharedEntry=null,reportAnalysis=null;
 const scopeLabel={private:'비공개',group:'그룹 공개',public:'전체 공개',inherit:'프로필 설정 따르기'};
 const reflectionLabel=p=>p===1?'일간 회고':p===7?'주간 회고':p===30?'월간 회고':p+'일 회고';
 const avatar=(person,progress)=>'<span class="avatar '+(progress?.streakDays>=140?'flame-strong':progress?.streakDays>=70?'flame-warm':'')+'">'+(person.avatar?'<img src="'+esc(person.avatar)+'" alt="">':initials(person.name))+(progress?.streakDays>=70?'<span class="avatar-fire" title="'+(progress.streakDays>=140?'20':'10')+'주 이상 연속 기록">'+icon('fire')+'</span>':'')+'</span>';
 const storageGet=key=>{try{return JSON.parse(sessionStorage.getItem(key)||'null')}catch{return null}};
 const storageSet=(key,value)=>{try{sessionStorage.setItem(key,JSON.stringify(value))}catch{}};
+const catColor=name=>state.categories.find(c=>c.name===name)?.color||'blue';
 const catIcon=name=>({'프로젝트':'layers','대외활동':'briefcase','동아리':'users','인턴십':'briefcase','학업':'book'}[name]||'folder');
 const tags=()=>[...new Set(state.entries.flatMap(e=>e.tags))];
 const dateText=d=>new Date(d+'T00:00:00').toLocaleDateString('ko-KR',{year:'numeric',month:'2-digit',day:'2-digit'}).replace(/\.$/,'');
@@ -57,7 +60,7 @@ async function api(path,method='GET',data,signal){
  if(!res.ok)throw Error(result.error||'요청을 처리하지 못했어요.');return result;
 }
 function toast(message){clearTimeout(toastTimer);$('#toast').textContent=message;$('#toast').classList.add('show');toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),3400);}
-function announce(message){const status=$('#save-status');status.textContent='';requestAnimationFrame(()=>status.textContent=message);}
+function announce(message){toast(message);const status=$('#save-status');status.textContent='';requestAnimationFrame(()=>status.textContent=message);}
 function errorInDialog(message){let e=$('.form-error');if(!e){e=document.createElement('div');e.className='form-error';e.setAttribute('role','alert');$('.dialog-body')?.prepend(e);}if(e)e.textContent=message;else toast(message);}
 async function refresh(){state=await api('state');render();}
 function navigate(next){if(!titles[next])next='dashboard';view=next;location.hash=next;render();window.scrollTo({top:0,behavior:'smooth'});}
@@ -66,34 +69,40 @@ function render(){
  if(!titles[view])view='dashboard';
  document.documentElement.style.fontSize=state.me.font_size+'px';
  document.body.dataset.font=state.me.font;
- const unread=state.notifications.filter(n=>!n.is_read).length,nav=[['dashboard','home'],['library','folder'],['groups','users'],['insights','briefcase']];
- $('#app').innerHTML='<aside class="sidebar"><a class="brand" href="#dashboard" aria-label="에이머스 홈"><span class="brand-mark">a</span>에이머스</a><nav class="nav" aria-label="주 메뉴">'+nav.map(([v,i])=>'<button data-action="nav" data-view="'+v+'" class="'+(view===v?'active':'')+'" '+(view===v?'aria-current="page"':'')+'>'+icon(i)+'<span>'+titles[v]+'</span></button>').join('')+'</nav><div class="sidebar-bottom"><p class="sidebar-note">오늘의 기억을<br>내일의 가능성으로.</p><button class="profile" data-action="nav" data-view="settings">'+avatar(state.me,state.progress)+'<span><strong>'+esc(state.me.name)+'</strong><small>프로필 및 설정</small></span>'+icon('settings')+'</button></div></aside><div class="shell"><header class="topbar"><span class="breadcrumb">'+titles[view]+'</span><a class="brand mobile-brand" href="#dashboard"><span class="brand-mark">a</span>에이머스</a><div class="top-actions"><span class="top-date">'+dateText(state.today)+'</span><button class="icon-button" data-action="notifications" aria-label="알림 '+unread+'개">'+icon('bell')+(unread?'<span class="notification-dot"></span>':'')+'</button><button class="profile-trigger" data-action="nav" data-view="settings" aria-label="프로필 및 설정">'+avatar(state.me,state.progress)+'</button></div></header><main class="main">'+({dashboard,library,groups,insights,settings}[view])()+'</main></div>';
+ const unread=state.notifications.filter(n=>!n.is_read).length;
+ const nav=[['dashboard','home','내 대시보드'],['library','folder','경험 보관함'],['groups','users','함께 기록'],['insights','chart','성장 인사이트']];
+ $('#app').innerHTML='<aside class="sidebar"><a class="brand" href="#dashboard" aria-label="에이머스 홈"><span class="brand-mark">a</span>에이머스</a><div class="workspace-label">MY WORKSPACE</div><nav class="nav" aria-label="주 메뉴">'+nav.map(([v,i,t])=>'<button data-action="nav" data-view="'+v+'" class="'+(view===v?'active':'')+'" '+(view===v?'aria-current="page"':'')+'>'+icon(i)+'<span>'+t+'</span>'+(v==='insights'?'<span class="small-pill">AI</span>':'')+'</button>').join('')+'<div class="nav-separator"></div><button data-action="nav" data-view="settings" class="settings-nav '+(view==='settings'?'active':'')+'">'+icon('settings')+'<span>설정</span></button></nav><div class="sidebar-bottom"><div class="upgrade-card"><span class="premium-tag">AIMERS TOOLS</span><p>쌓아온 경험을<br>더 큰 가능성으로 바꿔보세요.</p><button data-action="nav" data-view="insights">경험 활용 도구'+icon('arrow')+'</button></div><button class="profile" data-action="nav" data-view="settings">'+avatar(state.me,state.progress)+'<span><strong>'+esc(state.me.name)+'</strong><small>프로필 및 설정</small></span>'+icon('settings')+'</button></div></aside><div class="shell"><header class="topbar"><div class="breadcrumb">'+icon('home')+icon('right')+'<span>'+titles[view]+'</span></div><a class="brand mobile-brand" href="#dashboard"><span class="brand-mark">a</span>에이머스</a><div class="top-actions"><span class="top-date">'+new Date().toLocaleDateString('ko-KR',{month:'long',day:'numeric',weekday:'long'})+'</span>'+(state.mode==='local'?'<span class="mode-tag">로컬 체험</span>':'')+'<button class="icon-button" data-action="notifications" aria-label="알림 '+unread+'개">'+icon('bell')+(unread?'<span class="notification-dot"></span>':'')+'</button><button class="profile-trigger" data-action="nav" data-view="settings" aria-label="프로필 및 설정">'+avatar(state.me,state.progress)+'</button></div></header><main class="main">'+({dashboard:dashboard,library:library,groups:groups,insights:insights,settings:settings}[view])()+'</main></div>';
 }
-function heading(title,sub,action=''){return '<div class="page-heading" id="main-content" tabindex="-1"><div><h1>'+title+'</h1>'+(sub?'<p>'+sub+'</p>':'')+'</div>'+action+'</div>';}
+function heading(title,sub,action='',eyebrow=''){return '<div class="page-heading" id="main-content" tabindex="-1"><div>'+(eyebrow?'<div class="eyebrow">'+eyebrow+'</div>':'')+'<h1>'+title+'</h1>'+(sub?'<p>'+sub+'</p>':'')+'</div>'+action+'</div>';}
+function notebook(){return '<div class="hero-art" aria-hidden="true"><div class="art-shadow"></div><div class="notebook"><div class="book-label">'+icon('check')+'</div><div class="line"></div><div class="line"></div><div class="line short"></div></div><div class="pencil"></div>'+icon('spark','art-star')+'<div class="art-dot"></div><div class="art-badge">'+icon('check')+'</div></div>';}
+function weekStrip(){
+ const today=new Date(state.today+'T12:00:00+09:00'),weekday=(today.getDay()+6)%7;
+ const dates=new Set(state.entries.map(e=>dayKey(e.created_at)));
+ return '<div class="week-strip">'+['월','화','수','목','금','토','일'].map((n,i)=>{const d=new Date(today.getTime()+(i-weekday)*86400000),key=dayKey(d),done=dates.has(key);return '<div class="day '+(done?'done ':'')+(key===state.today?'today':'')+'"><span>'+n+'</span><span class="day-dot" title="'+key+(done?' 작성 완료':'')+'">'+(done?icon('check'):'')+'</span></div>';}).join('')+'</div>';
+}
 function empty(title,sub,label,action){return '<div class="empty-state">'+icon('folder')+'<h3>'+title+'</h3><p>'+sub+'</p>'+(label?btn(label,action,'primary','plus'):'')+'</div>';}
-function entryCard(e){
- const own=e.user_id===state.me.id,scope=e.visibility==='inherit'?state.me.visibility:e.visibility;
- return '<button type="button" class="entry-card" data-action="'+(own?'detail':'shared-entry')+'" data-id="'+esc(e.id)+'" data-user="'+esc(e.user_id)+'"><time class="entry-calendar" datetime="'+esc(e.date)+'" aria-label="'+dateText(e.date)+'"><span>'+esc(e.date.slice(0,7).replace('-','.'))+'</span><strong>'+esc(e.date.slice(8))+'</strong></time><div class="entry-copy"><div class="entry-top"><span class="entry-category">'+esc(e.category)+'</span><span class="entry-visibility">'+(own?(scope==='private'?icon('lock'):'')+scopeLabel[scope]:esc(e.author_name||'공개 기록'))+'</span></div><h3>'+esc(e.title)+'</h3><p>'+esc(e.summary.context||e.original)+'</p><div class="tags">'+e.tags.map(t=>'<span class="tag">#'+esc(t)+'</span>').join('')+'</div></div><span class="entry-open" aria-hidden="true">'+icon('right')+'</span></button>';
-}
+function entryCard(e){const own=e.user_id===state.me.id,scope=e.visibility==='inherit'?state.me.visibility:e.visibility;return '<button class="entry-card" data-action="'+(own?'detail':'shared-entry')+'" data-user="'+esc(e.user_id)+'" data-id="'+esc(e.id)+'"><div class="entry-top"><span class="entry-icon tone-'+catColor(e.category)+'">'+icon(catIcon(e.category))+'</span><span class="entry-category">'+esc(e.category)+'</span><span class="record-kind">'+kindLabel[e.kind||'experience']+'</span>'+'<span class="entry-visibility">'+(own?(scope==='private'?icon('lock'):'')+scopeLabel[scope]:esc(e.author_name||'공개 기록'))+'</span>'+'</div><h3>'+esc(e.title)+'</h3><p>'+esc(e.summary.context||e.original)+'</p><div class="tags">'+e.tags.map(t=>'<span class="tag">#'+esc(t)+'</span>').join('')+'</div><div class="entry-footer"><span>'+icon('calendar')+dateText(e.date)+'</span><span>기록 보기'+icon('right')+'</span></div></button>';}
 function dashboard(){
- const p=state.progress,days=new Set(state.entries.map(e=>dayKey(e.created_at))).size;
+ const p=state.progress,draft=storageGet('aimers-memo-draft')||{};
+ const periodMemos=state.entries.filter(e=>e.kind==='memo'&&e.date>=p.start&&e.date<=p.end),reflectionDone=state.entries.some(e=>e.kind==='reflection'&&e.periodStart===p.start&&e.periodEnd===p.end);
  const remaining=Math.max(0,Math.round((Date.parse(p.end)-Date.parse(state.today))/86400000));
- const draft=storageGet('aimers-draft-new')||{};
- const status=p.scheduled?'시작 예정':p.done?'이번 기간 기록 완료':remaining===0?'오늘 마감':'마감까지 '+remaining+'일';
- return heading(esc(state.me.name)+'님의 경험 노트','맡았던 일과 배운 점을 남기고, 필요한 순간에 다시 꺼내보세요.')+
- '<div class="dashboard-start"><section class="capture-panel"><div class="capture-heading"><h2>오늘의 경험</h2><time datetime="'+state.today+'">'+dateText(state.today)+'</time></div><p>잘 정리하지 않아도 괜찮아요. 기억나는 장면부터 적어보세요.</p><form id="quick-entry"><label for="quick-original">기억하고 싶은 장면</label><textarea id="quick-original" name="original" maxlength="20000" rows="3" placeholder="팀 프로젝트에서 첫 발표를 맡았다. 질문에 답하면서…">'+esc(draft.original||'')+'</textarea><div class="capture-footer"><span>적어둔 내용을 AI 질문으로 구체화할 수 있어요.</span><button type="submit" class="btn primary">'+icon('plus')+'기록 추가</button></div></form></section><section class="reflection-panel"><div class="reflection-title"><h2>'+reflectionLabel(state.me.cadence)+'</h2>'+icon('calendar')+'</div><p class="period-range">'+dateText(p.start)+' ~ '+dateText(p.end)+'</p><p class="reflection-state '+(p.done?'complete':'')+'">'+icon(p.done?'check':'clock')+status+'</p><p>'+(p.scheduled?'설정한 시작일부터 기록 주기를 계산해요.':p.done?'쌓인 경험을 돌아보며 배운 점을 더해보세요.':'이번 기간의 경험과 배운 점을 한 번에 돌아보세요.')+'</p><div class="reflection-actions">'+btn('회고 작성','review','white','edit',p.scheduled?'disabled':'')+'</div><div class="streak-summary">'+icon('fire')+'<span><strong>'+p.count+'회 연속</strong><small>'+(p.count?p.streakDays+'일 동안 기록 약속을 이어왔어요.':'이번 기록부터 꾸준함을 쌓아보세요.')+'</small></span></div>'+(p.previousMissed?'<p class="period-warning">지난 기간은 놓쳤지만, 다시 시작할 수 있어요.</p>':'')+'</section></div>'+
- '<dl class="metrics"><div><dt>전체 기록</dt><dd>'+state.entries.length+'<small>개</small></dd></div><div><dt>기록한 날</dt><dd>'+days+'<small>일</small></dd></div><div><dt>완료한 기간</dt><dd>'+p.totalCompleted+'<small>회</small></dd></div></dl>'+
- '<div class="content-grid"><section><div class="section-heading"><h2>최근 내 기록</h2>'+btn('전체 보기','nav','ghost','','data-view="library"')+'</div>'+(state.entries.length?'<div class="cards-grid">'+state.entries.slice(0,4).map(entryCard).join('')+'</div>':empty('첫 경험을 남겨보세요','한 문장으로 시작해도 괜찮아요. AI가 다음 질문을 도와드려요.','기록 추가','write'))+'</section><aside class="side-stack"><section class="panel"><div class="section-heading"><h2>내 그룹</h2>'+btn('모두 보기','nav','ghost','','data-view="groups"')+'</div>'+(state.groups.length?state.groups.slice(0,3).map(g=>'<button class="list-link" data-action="open-group" data-id="'+g.id+'"><span><strong>'+esc(g.name)+'</strong><small>'+g.members.filter(m=>m.done).length+' / '+g.members.length+'명 기록 완료</small></span>'+icon('right')+'</button>').join(''):'<p class="note">친구와 함께 기록하는 습관을 만들어보세요.</p>'+btn('그룹 만들기','create-group','secondary','plus'))+'</section><section class="panel"><h2>기록을 다음 단계로</h2><p class="note">쌓아둔 경험을 면접과 자소서에 연결해보세요.</p>'+[['questions','면접 예상 질문'],['recommend','자소서 경험 검색'],['report','성장 인사이트']].map(([a,l])=>'<button class="list-link" data-action="'+a+'"><span>'+l+'</span>'+icon('right')+'</button>').join('')+'</section></aside></div>';
+ const days=new Set(state.entries.map(e=>dayKey(e.created_at))).size;
+ const firstGroup=state.groups[0];
+ return heading(esc(state.me.name)+'님, 오늘도 한 걸음 더.','잊히기 아까운 경험, 차곡차곡 모아볼까요?',btn('경험 기록하기','write','primary','plus'),'나의 가능성이 자라는 곳')+
+ '<div class="hero-row"><section class="hero"><div class="hero-copy"><div class="hero-kicker">나를 위한 가장 작은 습관</div><h2>오늘의 경험이<br>내일의 나를 만드니까.</h2><p>대단한 성과가 아니어도 좋아요. 오늘부터 기록해요.</p>'+btn('경험 자세히 기록','write','primary','edit')+'<div class="quick-capture"><h3>빠른 메모</h3><p class="memo-help">지금은 짧게 저장하고, 회고에서 더 자세히 채워보세요.</p><form id="quick-entry"><label class="visually-hidden" for="quick-original">기억하고 싶은 장면</label><textarea id="quick-original" name="original" maxlength="2000" required rows="2" placeholder="오늘 기억하고 싶은 장면을 적어보세요.">'+esc(draft.original||'')+'</textarea><button class="btn white small" type="submit">메모 저장</button></form></div></div>'+notebook()+'</section><section class="panel streak-panel"><div class="panel-kicker">'+icon('fire')+'나의 기록 스트릭</div><div class="streak-head"><div class="streak-number">'+p.count+'<small>회 연속</small></div><div class="fire-orb">'+icon('fire')+'</div></div><p class="muted">'+(p.scheduled?'설정한 시작일부터 기록을 시작해요.':p.done?'이번 기간에 기록을 남겼어요.':remaining===0?'오늘 마감이에요. 이번 기간의 경험을 남겨보세요.':'마감까지 '+remaining+'일 남았어요.')+'</p><p class="period-range">'+reflectionLabel(state.me.cadence)+' / '+dateText(p.start)+' ~ '+dateText(p.end)+'</p>'+btn(reflectionLabel(state.me.cadence)+' 작성','review','secondary small','edit',p.scheduled?'disabled':'')+'<p class="period-summary">메모 '+periodMemos.length+'개 / 회고 '+(reflectionDone?'작성 완료':'작성 전')+'<br>기록한 기간 '+p.totalCompleted+'회</p>'+(p.previousMissed?'<p class="period-warning">지난 기간은 놓쳤지만 다시 시작할 수 있어요.</p>':'')+weekStrip()+'</section></div>'+
+ '<div class="stats-row">'+[['file','blue','쌓아온 경험',state.entries.length,'개','나만의 이야기'],['calendar','purple','기록한 날',days,'일','꾸준함의 힘'],['spark','mint','발견한 역량',tags().length,'개','기록에 담긴 태그']].map(([i,c,l,n,u,h])=>'<div class="stat"><span class="stat-icon tone-'+c+'">'+icon(i)+'</span><div><label>'+l+'</label><strong>'+n+'<small>'+u+'</small></strong></div><span class="stat-note">'+h+'</span></div>').join('')+'</div>'+
+ '<div class="content-grid"><section><div class="section-heading"><h2>최근 나의 경험 <span>'+state.entries.length+'</span></h2><button class="text-button" data-action="nav" data-view="library">전체 보기'+icon('right')+'</button></div>'+(state.entries.length?'<div class="cards-grid">'+state.entries.slice(0,4).map(entryCard).join('')+'</div>':empty('아직 기록한 경험이 없어요','첫 경험을 남기면 나만의 이야기가 쌓이기 시작해요.','경험 기록하기','write'))+'</section><aside class="side-stack"><section><div class="section-heading"><h2>함께 기록하는 우리</h2>'+icon('users')+'</div>'+(firstGroup?miniGroup(firstGroup):'<div class="panel group-empty"><div class="avatar-stack" aria-hidden="true"><span class="avatar">'+icon('user')+'</span><span class="avatar">'+icon('user')+'</span><span class="avatar">'+icon('user')+'</span></div><h3>함께하면 꾸준해져요</h3><p>서로의 작은 성장을 응원하는<br>나만의 기록 메이트를 만나보세요.</p>'+btn('첫 그룹 만들기','create-group','secondary full','plus')+'</div>')+'</section><section class="panel tip-card"><h3>'+icon('light')+'오늘의 기록 팁</h3><p>무엇을 했는지보다 어떻게 했는지를<br>적어보세요. 그 안에 나의 강점이 있어요.</p></section></aside></div><div class="page-foot">'+(sampleCount()?'예시 기록 '+sampleCount()+'개가 포함되어 있어요. 설정에서 지우고 나만의 기록을 시작할 수 있어요.':'작은 기록이 모여, 나만의 가능성이 됩니다.')+'</div>';
 }
+function miniGroup(g){const done=g.members.filter(m=>m.done).length;return '<div class="panel"><div class="group-title"><span class="stat-icon tone-blue">'+icon('users')+'</span><div><h2 style="font-size:14px">'+esc(g.name)+'</h2><p>각자의 주기로 함께 기록해요</p></div></div><div class="progress-top"><span>이번 기간 작성 현황</span><strong>'+done+' / '+g.members.length+'</strong></div><div class="progress-track"><div class="progress-fill" style="width:'+done/g.members.length*100+'%"></div></div><div class="divider"></div>'+btn('우리 그룹 보기','nav','secondary full','','data-view="groups"')+'</div>';}
 function library(){
- let entries=state.entries.filter(e=>(filter==='전체'||e.category===filter)&&(!query||(e.title+' '+e.original+' '+e.tags.join(' ')).toLowerCase().includes(query.toLowerCase())));
+ let entries=state.entries.filter(e=>(kindFilter==='all'||e.kind===kindFilter)&&(filter==='전체'||e.category===filter)&&(!query||(e.title+' '+e.original+' '+e.tags.join(' ')).toLowerCase().includes(query.toLowerCase())));
  if(sort==='oldest')entries=[...entries].reverse();if(sort==='category')entries=[...entries].sort((a,b)=>a.category.localeCompare(b.category,'ko')||b.date.localeCompare(a.date));
- return heading('내 기록','날짜와 카테고리로 찾고, 그때의 원문까지 다시 읽어보세요.',btn('기록 추가','write','primary','plus'))+
- '<div class="toolbar"><div class="searchbox">'+icon('search')+'<input id="search" aria-label="경험 검색" placeholder="제목, 내용, 역량으로 검색" value="'+esc(query)+'"></div><select id="sort" class="select-compact" aria-label="경험 정렬">'+[['newest','최신 활동순'],['oldest','오래된 활동순'],['category','카테고리순']].map(([v,l])=>'<option value="'+v+'" '+(sort===v?'selected':'')+'>'+l+'</option>').join('')+'</select>'+btn('지난 경험 등록','import','white','upload')+'</div><div class="filter-row">'+['전체',...state.categories.map(c=>c.name)].map(c=>'<button class="filter '+(filter===c?'active':'')+'" aria-pressed="'+(filter===c)+'" data-action="filter" data-category="'+esc(c)+'">'+esc(c)+'<span>'+(c==='전체'?state.entries.length:state.entries.filter(e=>e.category===c).length)+'</span></button>').join('')+btn('카테고리 추가','category','ghost','plus')+'</div><p class="results-count" role="status">총 '+entries.length+'개의 기록</p>'+(entries.length?'<div class="library-grid">'+entries.map(entryCard).join('')+'</div>':empty('조건에 맞는 기록이 없어요',query?'검색어나 카테고리를 바꿔보세요.':'첫 경험을 기록해 보세요.',query?'':'기록 추가','write'));
+ return heading('경험 보관함','날짜와 카테고리로 찾고, 그때의 원문까지 다시 읽어보세요.',btn('기록 추가','write','primary','plus'))+
+ '<div class="record-type-filters">'+[['all','전체 기록'],['memo','빠른 메모'],['reflection','회고'],['experience','경험 기록']].map(([value,label])=>'<button class="filter '+(kindFilter===value?'active':'')+'" aria-pressed="'+(kindFilter===value)+'" data-action="kind-filter" data-kind="'+value+'">'+label+'</button>').join('')+'</div><div class="toolbar"><div class="searchbox">'+icon('search')+'<input id="search" aria-label="경험 검색" placeholder="제목, 내용, 역량으로 검색" value="'+esc(query)+'"></div><select id="sort" class="select-compact" aria-label="경험 정렬">'+[['newest','최신 활동순'],['oldest','오래된 활동순'],['category','카테고리순']].map(([v,l])=>'<option value="'+v+'" '+(sort===v?'selected':'')+'>'+l+'</option>').join('')+'</select>'+btn('지난 경험 등록','import','white','upload')+'</div><div class="filter-row">'+['전체',...state.categories.map(c=>c.name)].map(c=>'<button class="filter '+(filter===c?'active':'')+'" aria-pressed="'+(filter===c)+'" data-action="filter" data-category="'+esc(c)+'">'+esc(c)+'<span>'+(c==='전체'?state.entries.length:state.entries.filter(e=>e.category===c).length)+'</span></button>').join('')+btn('카테고리 추가','category','ghost','plus')+'</div><p class="results-count" role="status">총 '+entries.length+'개의 기록</p>'+(entries.length?'<div class="library-grid">'+entries.map(entryCard).join('')+'</div>':empty('조건에 맞는 기록이 없어요',query?'검색어나 카테고리를 바꿔보세요.':'첫 경험을 기록해 보세요.',query?'':'기록 추가','write'));
 }
 function groups(){
  const selected=state.groups.find(g=>g.id===selectedGroup);
- return heading('내 그룹','서로의 속도를 존중하며, 함께 기록해요.',btn('그룹 만들기','create-group','primary','plus'))+
+ return heading('함께 기록','서로의 속도를 존중하며, 함께 기록해요.',btn('그룹 만들기','create-group','primary','plus'))+
  '<div class="section-heading">'+(selected?btn('그룹 목록','group-list','ghost','folder'):'<p class="note">참여 중인 그룹 '+state.groups.length+'개</p>')+btn('전체 공개 기록 둘러보기','public-records','white','search')+'</div>'+
  (selected?groupCard(selected):state.groups.length?'<div class="group-list">'+state.groups.map(g=>'<button class="group-list-item" data-action="open-group" data-id="'+g.id+'"><span class="stat-icon tone-blue">'+icon('users')+'</span><span><strong>'+esc(g.name)+'</strong><small>'+esc(g.description||'함께 기록하는 우리')+'</small><small>'+g.members.length+'명, '+g.members.filter(m=>m.done).length+'명 기록 완료</small></span>'+icon('right')+'</button>').join('')+'</div>':empty('첫 기록 메이트를 만나보세요','그룹을 만들고 초대 링크를 나눠보세요.','그룹 만들기','create-group'));
 }
@@ -101,12 +110,8 @@ function groupCard(g){
  return '<section class="panel group-card"><div class="group-title"><div><h2>'+esc(g.name)+'</h2><p>'+esc(g.description)+'</p></div>'+btn('초대 링크','invite','white','link','data-id="'+g.id+'"')+'</div><p class="note">각 멤버가 설정한 주기와 시작일을 기준으로 작성 여부를 확인해요.</p>'+g.members.map(m=>'<div class="member-row"><button class="member-profile" data-action="member-profile" data-user="'+esc(m.id)+'">'+avatar(m,m.progress)+'<span><strong>'+esc(m.name)+(m.id===state.me.id?' (나)':'')+'</strong><small>'+periodLabel(m.cadence)+', '+m.streak+'회 연속</small><small>'+dateText(m.progress.start)+' ~ '+dateText(m.progress.end)+'</small></span></button><div class="member-status"><span class="status '+(m.done?'complete':m.progress.scheduled?'':'waiting')+'">'+icon(m.done?'check':'clock')+(m.done?'작성 완료':m.progress.scheduled?'시작 예정':'미작성')+'</span>'+(!m.done&&!m.progress.scheduled&&m.id!==state.me.id?btn('콕 찌르기','poke','secondary small','hand','data-group="'+g.id+'" data-user="'+esc(m.id)+'"'):'')+'</div></div>').join('')+'<p class="note group-note">프로필을 누르면 열람 가능한 기록을 볼 수 있어요. 비공개 기록은 본인만 볼 수 있어요.</p></section>';
 }
 function insights(){
- return heading('부가 서비스','쌓아둔 경험, 이제 다음 기회로 연결해보세요.')+
- '<div class="service-list">'+[
- ['mic','면접 예상 질문','경험 하나를 골라, 나의 역할과 선택을 설명하는 연습을 해보세요.','questions','질문 만들기','질문 예시','그 프로젝트에서 본인이 맡은 역할은 무엇이었나요?'],
- ['search','자소서 문항 관련 경험 검색','쓰고 싶은 문항을 입력하면, 어울리는 경험과 활용할 포인트를 찾아드려요.','recommend','경험 찾기','문항 예시','협업으로 문제를 해결한 경험을 서술해 주세요.'],
- ['chart','성장 인사이트','학기별 경험을 나란히 돌아보고, 달라진 점과 다음 목표를 발견하세요.','report','학기 돌아보기','살펴볼 내용','활동의 변화, 새롭게 쌓인 역량, 다음 학기 계획']
- ].map(([ic,title,description,action,label,caption,example])=>'<section class="service-row"><span class="service-symbol">'+icon(ic)+'</span><div class="service-copy"><h2>'+title+'</h2><p>'+description+'</p>'+btn(label,action,'secondary')+'</div><div class="service-example"><span>'+caption+'</span><p>'+example+'</p></div></section>').join('')+'</div><p class="service-note">'+(state.aiEnabled?'AI가 내 기록을 바탕으로 생성해요. 결과는 원문과 함께 확인하세요.':'AI 연결이 설정되지 않았어요. 기록과 기본 학기 통계는 사용할 수 있어요.')+'</p>';
+ const features=[['mic','blue','면접 질문 연습','기록한 경험을 돌아보며, 나만의 답변을 미리 준비해요.','questions'],['chart','purple','학기별 성장 보고서','한 학기 동안 쌓인 경험과 역량을 한눈에 돌아봐요.','report'],['spark','mint','자소서 경험 찾기','자소서 문항과 연결할 수 있는 경험을 찾아보세요.','recommend']];
+ return heading('성장 인사이트','쌓아온 경험에서, 다음 가능성을 발견해요.')+'<div class="insight-banner"><div><span class="pill">EXPERIENCE TOOLS</span><h2>기록에서 끝나지 않는 성장.</h2><p>내 경험을 면접과 자소서로 연결해보세요.<br>'+(state.aiEnabled?'AI가 내 기록을 바탕으로 생성해요. 결과는 원문과 함께 확인하세요.':'AI 연결이 설정되지 않았어요. 기록과 기본 학기 통계는 사용할 수 있어요.')+'</p></div>'+icon('spark')+'</div><div class="insight-grid">'+features.map(([i,c,t,p,a])=>'<section class="panel feature-card"><span class="stat-icon tone-'+c+'">'+icon(i)+'</span><h3>'+t+'</h3><p>'+p+'</p>'+btn('열기',a,'white small','arrow')+'</section>').join('')+'</div><div class="panel" style="margin-top:26px"><div class="section-heading"><h2>나의 경험 지도</h2><span class="note">카테고리별 기록 수</span></div><div class="bar-chart">'+state.categories.map(c=>{const n=state.entries.filter(e=>e.category===c.name).length,max=Math.max(1,...state.categories.map(x=>state.entries.filter(e=>e.category===x.name).length));return '<div class="bar-col"><span class="bar-count">'+n+'</span><div class="bar" style="height:'+Math.max(3,n/max*105)+'px"></div><span>'+esc(c.name)+'</span></div>';}).join('')+'</div></div>';
 }
 function settings(){
  const p=state.progress;profileAvatar=state.me.avatar;
@@ -124,7 +129,7 @@ function closeDialog(){
  if(aiController){aiController.abort();aiController=null;}$('#app').inert=false;$('.skip-link').inert=false;
  if(speech){speech.stop();speech=null;}
  $('#overlay').innerHTML='';document.body.style.overflow='';
- if($('#quick-original'))$('#quick-original').value=storageGet('aimers-draft-new')?.original||'';
+ if($('#quick-original'))$('#quick-original').value=storageGet('aimers-memo-draft')?.original||'';
  if(dialogFocus?.isConnected)dialogFocus.focus();
 }
 function localSummary(original){
@@ -133,19 +138,66 @@ function localSummary(original){
 }
 function summaryHtml(s){return [['context','어떤 경험이었나요','활동의 배경이나 상황을 적어보세요.'],['action','나는 무엇을 했나요','내가 맡은 역할과 직접 한 행동을 적어보세요.'],['result','무엇을 얻었나요','결과나 배운 점을 구체적으로 남겨보세요.']].map(([key,title,hint])=>'<div class="summary-section"><h4>'+title+'</h4><p class="'+(s[key]?'':'missing')+'">'+esc(s[key]||hint)+'</p></div>').join('');}
 function writeEntry(id,review=false){
- const e=state.entries.find(x=>x.id===id),draftKey='aimers-draft-'+(id||(review?'review':'new')),draft=storageGet(draftKey);
+ const e=state.entries.find(x=>x.id===id);review=review||e?.kind==='reflection';
+ const draftKey='aimers-draft-'+(id||(review?'review-'+state.progress.start+'-'+state.progress.end:'new')),draft=storageGet(draftKey);
  const d=draft||e||{title:review?reflectionLabel(state.me.cadence)+', '+state.progress.start:'',category:state.categories[0]?.name||'대외활동',date:state.today,original:'',tags:[],visibility:'inherit'};
+ editorContext={kind:e?.kind||(review?'reflection':'experience'),periodStart:state.progress.start,periodEnd:state.progress.end,sourceIds:[],conversation:[],askedQuestions:[],pendingQuestions:[],pendingAnswers:[],...d};
+ if(review&&!draft&&!e)editorContext.sourceIds=state.entries.filter(x=>x.kind==='memo'&&x.date>=editorContext.periodStart&&x.date<=editorContext.periodEnd).slice(0,20).map(x=>x.id);
  const visibility='<div class="save-visibility"><label for="entry-visibility">공개 범위</label><select id="entry-visibility" name="visibility" form="entry-form">'+['inherit','private','group','public'].map(v=>'<option value="'+v+'" '+((d.visibility||'inherit')===v?'selected':'')+'>'+scopeLabel[v]+(v==='inherit'?' ('+scopeLabel[state.me.visibility]+')':'')+'</option>').join('')+'</select><span>공개 시 원문도 함께 보여요.</span></div>';
  openDialog(e?'기록 수정':review?reflectionLabel(state.me.cadence):'경험 기록하기','내가 겪은 일부터, 내 말로 남겨보세요.',
- (review?'<p class="form-note">돌아볼 기간: '+dateText(state.progress.start)+' ~ '+dateText(state.progress.end)+'<br>기억에 남는 일, 내가 한 행동, 다음에 바꾸고 싶은 점을 남겨보세요.</p>':'')+
- '<form id="entry-form" data-id="'+esc(e?.id||'')+'" data-draft="'+draftKey+'"><div class="editor-grid"><div><div class="voice-row"><label for="entry-original">어떤 일이 있었나요?</label><button class="voice-button" type="button" data-action="voice">'+icon('mic')+'말로 기록</button></div><textarea id="entry-original" name="original" maxlength="20000" required rows="6" autofocus placeholder="예: 팀 프로젝트를 경험했어요. 발표를 맡았는데 준비 과정이 쉽지 않았어요.">'+esc(d.original)+'</textarea><p class="field-help">작성 중인 내용은 이 탭에 임시 저장돼요.</p>'+btn('AI와 경험 구체화','ai-reflect','secondary','spark',state.aiEnabled?'':'disabled')+'<div id="ai-followup" aria-live="polite"></div><p id="ai-status" class="ai-status" role="status"></p><div class="entry-metadata"><div class="field"><label for="entry-title">이 경험의 제목</label><input id="entry-title" name="title" maxlength="120" required placeholder="나중에도 떠올릴 수 있는 제목" value="'+esc(d.title)+'"></div><div class="form-row"><div class="field"><label for="entry-category">카테고리</label><select id="entry-category" name="category">'+state.categories.map(c=>'<option '+(c.name===d.category?'selected':'')+'>'+esc(c.name)+'</option>').join('')+'</select></div><div class="field"><label for="entry-date">활동 날짜</label><input id="entry-date" type="date" name="date" required max="'+state.today+'" value="'+esc(d.date)+'"></div></div><div class="field"><label for="entry-tags">역량 태그 <span class="optional">선택</span></label><input name="tags" id="entry-tags" placeholder="협업, 문제해결" maxlength="150" value="'+esc(d.tags.join(', '))+'"><span class="field-help">쉼표로 구분해 최대 6개</span></div></div></div><aside class="summary-preview"><h3>'+icon('spark')+'정리 미리보기</h3><p id="summary-caption" class="field-help">입력한 경험을 바탕으로 함께 정리해요.</p><div id="live-summary">'+(d.original?summaryHtml(localSummary(d.original)):'<div class="summary-empty"><p>한 문장이면 충분해요.</p><p>경험을 적으면 배경, 나의 역할, 배운 점을 여기서 살펴볼 수 있어요.</p><p>더 자세히 떠올리고 싶다면<br>AI와 경험 구체화를 눌러보세요.</p></div>')+'</div></aside></div></form>',
+ (review?'<p class="form-note">짧게 남긴 메모를 골라, 그때의 판단과 배운 점을 구체적으로 돌아보세요. 메모 원문은 그대로 남아요.</p>':'')+
+ '<form id="entry-form" data-id="'+esc(e?.id||'')+'" data-draft="'+draftKey+'">'+(review?reviewSetupHtml():'')+'<div class="editor-grid"><div><div class="voice-row"><label for="entry-original">어떤 일이 있었나요?</label><button class="voice-button" type="button" data-action="voice">'+icon('mic')+'말로 기록</button></div><textarea id="entry-original" name="original" maxlength="'+(editorContext.kind==='memo'?2000:20000)+'" '+(review?'':'required')+' rows="6" autofocus placeholder="예: 팀 프로젝트를 경험했어요. 발표를 맡았는데 준비 과정이 쉽지 않았어요.">'+esc(d.original)+'</textarea><p class="field-help">작성 중인 내용은 이 탭에 임시 저장돼요.</p>'+btn(review?'선택한 메모로 회고 질문 받기':'AI와 경험 구체화',review?'ai-review':'ai-reflect','secondary','spark',state.aiEnabled?'':'disabled')+(review?'<div id="review-followups" aria-live="polite"></div>':'')+'<div id="ai-followup" aria-live="polite"></div><p id="ai-status" class="ai-status" role="status"></p><div class="entry-metadata"><div class="field"><label for="entry-title">이 경험의 제목</label><input id="entry-title" name="title" maxlength="120" required placeholder="나중에도 떠올릴 수 있는 제목" value="'+esc(d.title)+'"></div><div class="form-row"><div class="field"><label for="entry-category">카테고리</label><select id="entry-category" name="category">'+state.categories.map(c=>'<option '+(c.name===d.category?'selected':'')+'>'+esc(c.name)+'</option>').join('')+'</select></div><div class="field"><label for="entry-date">활동 날짜</label><input id="entry-date" type="date" name="date" required max="'+state.today+'" value="'+esc(d.date)+'"></div></div><div class="field"><label for="entry-tags">역량 태그 <span class="optional">선택</span></label><input name="tags" id="entry-tags" placeholder="협업, 문제해결" maxlength="150" value="'+esc(d.tags.join(', '))+'"><span class="field-help">쉼표로 구분해 최대 6개</span></div></div></div><aside class="summary-preview"><h3>'+icon('spark')+'정리 미리보기</h3><p id="summary-caption" class="field-help">입력한 경험을 바탕으로 함께 정리해요.</p><div id="live-summary">'+(d.original?summaryHtml(localSummary(d.original)):'<div class="summary-empty"><p>한 문장이면 충분해요.</p><p>경험을 적으면 배경, 나의 역할, 배운 점을 여기서 살펴볼 수 있어요.</p><p>더 자세히 떠올리고 싶다면<br>AI와 경험 구체화를 눌러보세요.</p></div>')+'</div></aside></div></form>',
  visibility+'<div class="save-actions">'+btn('취소','close','ghost')+'<button class="btn white" type="submit" form="entry-form" value="raw">원문 저장</button><button class="btn primary" type="submit" form="entry-form" value="ai" '+(state.aiEnabled?'':'disabled')+'>'+icon('spark')+'AI 정리 후 저장</button></div>',true);
+ if(review)renderReviewQuestions();
  if(d.followup&&(d.original.trim()||d.followup.answer.trim()))$('#ai-followup').innerHTML=followupHtml(d.followup.question,d.followup.answer,d.followup.stale);
+}
+function reviewSetupHtml(){
+ return '<section class="review-setup"><h3>이번 회고에 담을 기록</h3><div class="form-row"><div class="field"><label for="review-start">시작 날짜</label><input id="review-start" type="date" name="periodStart" required value="'+editorContext.periodStart+'"></div><div class="field"><label for="review-end">마지막 날짜</label><input id="review-end" type="date" name="periodEnd" required value="'+editorContext.periodEnd+'"></div></div><p class="field-help">기간 안의 메모와 경험에서 최대 20개를 골라요. 이전 주도 날짜를 바꿔 돌아볼 수 있어요. 긴 경험 기록은 앞 2,000자를 참고해요.</p><div id="review-sources">'+reviewSourcesHtml()+'</div></section>';
+}
+function reviewSourcesHtml(){
+ const entries=state.entries.filter(e=>e.kind!=='reflection'&&e.date>=editorContext.periodStart&&e.date<=editorContext.periodEnd);
+ return entries.length?entries.map(e=>'<label class="review-source"><input type="checkbox" data-review-source value="'+esc(e.id)+'" '+(editorContext.sourceIds.includes(e.id)?'checked':'')+'><span><strong>'+esc(e.title)+'</strong><small>'+dateText(e.date)+' / '+kindLabel[e.kind||'experience']+'</small><span>'+esc(e.original.slice(0,180))+'</span></span></label>').join(''):'<p class="note">이 기간에는 아직 메모가 없어요. 아래에 회고를 직접 쓰고 AI 질문을 받을 수도 있어요.</p>';
+}
+function editorPayload(){
+ const form=$('#entry-form'),data=Object.fromEntries(new FormData(form));
+ return {...data,kind:editorContext.kind,tags:(data.tags||'').split(',').map(s=>s.trim()).filter(Boolean),sourceIds:editorContext.kind==='reflection'?$$('[data-review-source]:checked').map(e=>e.value):[],conversation:editorContext.conversation||[]};
+}
+function saveEditorDraft(){
+ const form=$('#entry-form');if(!form||!editorContext)return;
+ editorContext.pendingAnswers=$$('[data-review-answer]').map(e=>e.value);
+ const data=editorPayload();editorContext={...editorContext,...data};
+ if($('#followup-question'))editorContext.followup={question:$('#followup-question').textContent,answer:$('#followup-answer').value,stale:$('.followup').dataset.stale==='true'};else editorContext.followup=null;
+ storageSet(form.dataset.draft,{...editorContext});
+}
+function renderReviewQuestions(){
+ const node=$('#review-followups');if(!node)return;
+ const questions=editorContext.pendingQuestions||[],answers=editorContext.pendingAnswers||[];
+ node.innerHTML=questions.length?'<section class="review-question-box"><h3>이번 주의 장면을 더 자세히</h3><p class="field-help">답변은 회고에 함께 저장돼요. 기억나지 않는 질문은 건너뛸 수 있어요.</p>'+questions.map((q,i)=>'<div class="review-question"><span class="tag">'+esc(state.questionFocuses?.find(f=>f.id===q.focus)?.label||'경험 구체화')+'</span><label for="review-answer-'+i+'">'+esc(q.question)+'</label><p class="field-help">'+esc(q.intent)+'</p><textarea id="review-answer-'+i+'" data-review-answer="'+i+'" rows="3" maxlength="5000" placeholder="그때의 상황과 직접 한 행동을 적어보세요.">'+esc(answers[i]||'')+'</textarea><small class="review-evidence">'+q.evidenceIds.map(id=>esc(state.entries.find(e=>e.id===id)?.title||'연결한 기록')).join(', ')+'</small></div>').join('')+btn('답변 반영하고 더 깊이 돌아보기','review-answer','secondary','spark',state.aiEnabled?'':'disabled')+'</section>':'';
+}
+function appendReviewAnswers(){
+ if(editorContext?.kind!=='reflection')return;
+ const turns=(editorContext.pendingQuestions||[]).map((q,i)=>({...q,answer:$$('[data-review-answer]')[i]?.value.trim()||''})).filter(q=>q.answer);
+ if(!turns.length)return;
+ const original=$('#entry-original'),text=original.value+turns.map(q=>'\n\n질문: '+q.question+'\n답변: '+q.answer).join('');
+ if(text.length>20000||(editorContext.conversation||[]).length+turns.length>24)throw Error('이번 회고의 분량이 찼어요. 현재 내용을 먼저 저장해 주세요.');
+ original.value=text;editorContext.conversation.push(...turns.map(({question,answer,focus,evidenceIds})=>({question,answer,focus,evidenceIds})));
+ editorContext.pendingQuestions=[];editorContext.pendingAnswers=[];renderReviewQuestions();saveEditorDraft();$('#live-summary').innerHTML=summaryHtml(localSummary(text));
+}
+async function reviewAI(button){
+ appendReviewAnswers();saveEditorDraft();const data=editorPayload();
+ if(!data.original.trim()&&!data.sourceIds.length){errorInDialog('메모를 선택하거나 회고를 한 문장 이상 적어주세요.');return;}
+ if(speech){speech.stop();speech=null;}
+ await aiTask(button,'ai/review',{...data,previousQuestions:[...(editorContext.conversation||[]),...(editorContext.askedQuestions||[])].slice(-24)},result=>{
+  editorContext.pendingQuestions=result.questions;editorContext.pendingAnswers=[];
+  editorContext.askedQuestions=[...(editorContext.askedQuestions||[]),...result.questions.map(q=>({question:q.question,focus:q.focus,evidenceIds:q.evidenceIds,answer:''}))].slice(-24);
+  $('#live-summary').innerHTML=summaryHtml(result.summary);$('#summary-caption').textContent='선택한 메모와 회고를 함께 읽고 정리했어요.';renderReviewQuestions();saveEditorDraft();
+  if(!result.questions.length)$('#review-followups').innerHTML='<p class="inline-success">이번 회고의 핵심이 충분히 드러나요. 내용을 확인하고 저장해 주세요.</p>';
+ });
 }
 function detail(id,tab='summary'){
  const e=state.entries.find(x=>x.id===id)||(sharedEntry?.id===id?sharedEntry:null);if(!e)return;
  const own=e.user_id===state.me.id;
- openDialog(esc(e.title),'', '<div class="detail-meta"><span class="tag">'+esc(e.category)+'</span><span>'+dateText(e.date)+'</span>'+e.tags.map(t=>'<span class="tag">#'+esc(t)+'</span>').join('')+'</div><div class="tabs"><button aria-pressed="'+(tab==='summary')+'" class="tab '+(tab==='summary'?'active':'')+'" data-action="detail-tab" data-id="'+esc(id)+'" data-tab="summary">정리본</button><button aria-pressed="'+(tab==='original')+'" class="tab '+(tab==='original'?'active':'')+'" data-action="detail-tab" data-id="'+esc(id)+'" data-tab="original">원본 보기</button></div>'+(tab==='original'?'<div class="original-text">'+esc(e.original)+'</div>':'<p class="form-note">'+(e.summary.source==='deepseek'?'AI가 원문에 근거해 정리했어요. 원본과 함께 확인해 주세요.':'원문의 관련 문장을 추출한 기본 정리예요.')+'</p>'+summaryHtml(e.summary)),(own?btn('삭제','delete-entry','danger small','trash','data-id="'+esc(id)+'"')+btn('수정하기','edit-entry','white small','edit','data-id="'+esc(id)+'"'):'')+btn('닫기','close','primary small'),true);
+ openDialog(esc(e.title),'', '<div class="detail-meta"><span class="tag">'+kindLabel[e.kind||'experience']+'</span><span class="tag">'+esc(e.category)+'</span><span>'+dateText(e.date)+'</span>'+e.tags.map(t=>'<span class="tag">#'+esc(t)+'</span>').join('')+'</div>'+(e.kind==='reflection'?'<p class="form-note">회고 기간: '+dateText(e.periodStart)+' ~ '+dateText(e.periodEnd)+'</p>':'')+'<div class="tabs"><button aria-pressed="'+(tab==='summary')+'" class="tab '+(tab==='summary'?'active':'')+'" data-action="detail-tab" data-id="'+esc(id)+'" data-tab="summary">정리본</button><button aria-pressed="'+(tab==='original')+'" class="tab '+(tab==='original'?'active':'')+'" data-action="detail-tab" data-id="'+esc(id)+'" data-tab="original">원본 보기</button></div>'+(own&&e.kind==='reflection'&&e.sourceIds?.length?'<details class="review-linked-notes"><summary>함께 돌아본 원본 기록 '+e.sourceIds.length+'개</summary>'+e.sourceIds.map(sourceId=>{const memo=state.entries.find(x=>x.id===sourceId);return memo?'<section><h3>'+esc(memo.title)+'</h3><p class="original-text">'+esc(memo.original)+'</p></section>':'<p class="note">삭제된 원본 기록이 있어요. 회고 내용은 그대로 남아 있어요.</p>';}).join('')+'</details>':'')+(tab==='original'?'<div class="original-text">'+esc(e.original)+'</div>':'<p class="form-note">'+(e.summary.source==='deepseek'?'AI가 원문에 근거해 정리했어요. 원본과 함께 확인해 주세요.':'원문의 관련 문장을 추출한 기본 정리예요.')+'</p>'+summaryHtml(e.summary)),(own?btn('삭제','delete-entry','danger small','trash','data-id="'+esc(id)+'"')+btn('수정하기','edit-entry','white small','edit','data-id="'+esc(id)+'"'):'')+btn('닫기','close','primary small'),true);
 }
 async function aiTask(button,path,data,success){
  if(aiController||busy)return;
@@ -201,16 +253,17 @@ function parseImport(){
  let parsed;if(text.startsWith('[')||text.startsWith('{')){try{const data=JSON.parse(text);parsed=Array.isArray(data)?data:data.entries}catch{throw Error('JSON 형식을 확인해 주세요.')}}else parsed=text.split('\n').filter(s=>s.trim()).map((line,i)=>{const parts=line.split('|').map(s=>s.trim());if(parts.length<4)throw Error((i+1)+'번째 줄의 형식을 확인해 주세요.');return{date:parts[0],category:parts[1],title:parts[2],original:parts.slice(3).join(' | '),tags:[]};});
  if(!Array.isArray(parsed)||!parsed.length||parsed.length>50)throw Error('1개부터 50개까지 등록해 주세요.');
  parsed.forEach((e,i)=>{if(!e.title||!e.category||!e.original||!/^\d{4}-\d{2}-\d{2}$/.test(e.date)||!Number.isFinite(Date.parse(e.date))||new Date(e.date).toISOString().slice(0,10)!==e.date||e.date>state.today)throw Error((i+1)+'번째 경험의 제목, 내용과 날짜를 확인해 주세요.');});
- return parsed.map(e=>({title:e.title,category:e.category,date:e.date,original:e.original,tags:Array.isArray(e.tags)?e.tags:[],visibility:e.visibility||'inherit'}));
+ return parsed.map(e=>({...e,title:e.title,category:e.category,date:e.date,original:e.original,tags:Array.isArray(e.tags)?e.tags:[],visibility:e.visibility||'inherit'}));
 }
 function download(name,data,type='application/json'){const url=URL.createObjectURL(new Blob([typeof data==='string'?data:JSON.stringify(data,null,2)],{type}));const a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function questions(){
  if(!state.entries.length){toast('먼저 경험을 기록해 주세요.');return;}
- openDialog('면접 예상 질문','경험별 질문을 만들고 나만의 답변을 준비하세요.','<div class="form-row"><div class="field"><label for="question-category">카테고리</label><select id="question-category"><option value="">전체</option>'+state.categories.map(c=>'<option>'+esc(c.name)+'</option>').join('')+'</select></div><div class="field"><label for="question-entry">연습할 경험</label><select id="question-entry">'+state.entries.map(e=>'<option value="'+e.id+'">'+esc(e.title)+'</option>').join('')+'</select></div></div>'+btn('AI 질문 만들기','ai-interview','primary','spark',state.aiEnabled?'':'disabled')+'<p id="ai-status" class="ai-status" role="status"></p><div id="question-list"></div>',btn('닫기','close','white'),true);renderQuestions(state.entries[0].id);
+ openDialog('면접 예상 질문','경험별 질문을 만들고 나만의 답변을 준비하세요.','<div class="form-row"><div class="field"><label for="question-category">카테고리</label><select id="question-category"><option value="">전체</option>'+state.categories.map(c=>'<option>'+esc(c.name)+'</option>').join('')+'</select></div><div class="field"><label for="question-entry">연습할 경험</label><select id="question-entry">'+state.entries.map(e=>'<option value="'+e.id+'">'+esc(e.title)+'</option>').join('')+'</select></div></div><div class="form-row"><div class="field"><label for="interview-role">지원 직무 / 선택</label><input id="interview-role" maxlength="100" placeholder="예: 서비스 기획, 마케팅, 개발"></div><div class="field"><label for="interview-focus">연습 관점</label><select id="interview-focus"><option value="">다양하게</option>'+(state.questionFocuses||[]).map(f=>'<option value="'+f.id+'">'+esc(f.label)+'</option>').join('')+'</select></div></div>'+btn('새 질문 5개 만들기','ai-interview','primary','spark',state.aiEnabled?'':'disabled')+'<p id="ai-status" class="ai-status" role="status"></p><div id="question-list"></div>',btn('닫기','close','white'),true);renderQuestions(state.entries[0].id);
 }
 function renderQuestions(id){
  const e=state.entries.find(e=>e.id===id),cached=storageGet('aimers-interview-'+id);
- $('#question-list').innerHTML=cached&&e&&cached.updatedAt===e.updated_at?'<p class="field-help">연습 답변은 이 브라우저 탭에 임시 저장돼요.</p>'+cached.questions.map((q,i)=>'<section class="question-card"><h3>'+esc(q.question)+'</h3><p>'+esc(q.intent)+'</p><label for="answer-'+i+'">나의 답변</label><textarea id="answer-'+i+'" class="answer-input" data-entry="'+id+'" data-index="'+i+'" rows="3" placeholder="나의 역할과 구체적인 장면을 떠올려보세요.">'+esc(cached.answers?.[i]||'')+'</textarea></section>').join(''):'<p class="form-note">경험을 선택하고 질문을 만들어보세요. AI가 기록에 있는 역할과 상황을 읽고 질문해요.</p>';
+ const references='<details class="question-references"><summary>질문 구성 참고 자료</summary><p class="field-help">공식 채용 가이드의 질문 방식을 내 경험에 적용한 연습 질문이에요. 실제 기출과 동일함을 보장하지 않아요.</p>'+(state.interviewReferences||[]).map(source=>'<a href="'+esc(source.url)+'" target="_blank" rel="noopener noreferrer">'+esc(source.title)+'</a>').join('')+'</details>';
+ $('#question-list').innerHTML=(cached&&e&&cached.updatedAt===e.updated_at?'<p class="field-help">새 질문을 추가해도 기존 질문과 답변은 유지해요. 최근 24개를 이 탭에 보관해요.</p>'+cached.questions.map((q,i)=>'<section class="question-card"><span class="tag">'+esc(state.questionFocuses?.find(f=>f.id===q.focus)?.label||'경험 면접')+'</span><h3>'+esc(q.question)+'</h3><p>'+esc(q.intent)+'</p>'+(q.followups?.length?'<details><summary>꼬리질문과 답변 점검</summary><ul>'+q.followups.map(text=>'<li>'+esc(text)+'</li>').join('')+'</ul><p class="field-help">답변에 담을 근거</p><ul>'+(q.answerGuide||[]).map(text=>'<li>'+esc(text)+'</li>').join('')+'</ul></details>':'')+'<label for="answer-'+i+'">나의 답변</label><textarea id="answer-'+i+'" class="answer-input" data-entry="'+esc(id)+'" data-index="'+i+'" rows="3" placeholder="판단의 근거와 직접 한 행동을 구체적으로 적어보세요.">'+esc(cached.answers?.[i]||'')+'</textarea></section>').join(''):'<p class="form-note">경험을 선택하고 질문을 만들어보세요. 판단, 협업, 결과 검증, 학습과 가상 상황 등 서로 다른 관점으로 연습해요.</p>')+references;
 }
 let reportRows=[];
 function semesterKey(date){const year=Number(date.slice(0,4)),month=Number(date.slice(5,7));return (month<3?year-1:year)+'-'+(month>=3&&month<=8?'1':'2');}
@@ -249,6 +302,9 @@ document.addEventListener('click',async event=>{
  else if(a==='public-records'||a==='public-page'){el.disabled=true;try{await publicRecords(Number(el.dataset.offset||0));}finally{el.disabled=false;}}
  else if(a==='shared-entry'){const data=await api('users/'+encodeURIComponent(el.dataset.user));sharedEntry=data.entries.find(e=>e.id===el.dataset.id);if(!sharedEntry)throw Error('공개 범위가 변경되어 기록을 열람할 수 없어요.');detail(sharedEntry.id);}
  else if(a==='clear-avatar'){profileAvatar='';$('#avatar-preview').innerHTML=avatar({name:state.me.name});}
+ else if(a==='kind-filter'){kindFilter=el.dataset.kind;render();}
+ else if(a==='ai-review')await reviewAI(el);
+ else if(a==='review-answer'){if(!$$('[data-review-answer]').some(input=>input.value.trim())){errorInDialog('답변을 하나 이상 적어주세요.');return;}await reviewAI($('[data-action="ai-review"]'));}
  else if(a==='ai-reflect')await reflect(el);
  else if(a==='ai-answer'){
   if(!$('#followup-answer').value.trim()){errorInDialog('추가 답변을 적어주세요.');return;}
@@ -256,7 +312,12 @@ document.addEventListener('click',async event=>{
  }
  else if(a==='ai-interview'){
   const id=$('#question-entry').value;if(!id){errorInDialog('선택한 카테고리에 경험이 없어요.');return;}
-  await aiTask(el,'ai/interview',{entryId:id},result=>{const e=state.entries.find(e=>e.id===id);storageSet('aimers-interview-'+id,{...result,answers:[],updatedAt:e.updated_at});renderQuestions(id);});
+  const e=state.entries.find(e=>e.id===id),stored=storageGet('aimers-interview-'+id),previous=stored?.updatedAt===e.updated_at?stored:{questions:[],answers:[]};
+  await aiTask(el,'ai/interview',{entryId:id,targetRole:$('#interview-role').value,focus:$('#interview-focus').value,previousQuestions:previous.questions.slice(-24).map(q=>({question:q.question,focus:q.focus}))},result=>{
+   const seen=new Set(previous.questions.map(q=>q.question)),fresh=result.questions.filter(q=>!seen.has(q.question));
+   const combined=[...previous.questions,...fresh],answers=[...(previous.answers||[]),...fresh.map(()=> '')];
+   storageSet('aimers-interview-'+id,{...result,questions:combined.slice(-24),answers:answers.slice(-24),updatedAt:e.updated_at});renderQuestions(id);
+  });
  }
  else if(a==='ai-report'){
   await aiTask(el,'ai/report',{semester:$('#report-semester').value},result=>{
@@ -297,35 +358,46 @@ document.addEventListener('click',async event=>{
 });
 document.addEventListener('submit',async event=>{
  const form=event.target;event.preventDefault();if(busy||aiController)return;
- if(form.id==='quick-entry'){const draft=storageGet('aimers-draft-new')||{title:'',category:state.categories[0]?.name||'대외활동',date:state.today,tags:[],visibility:'inherit'};draft.original=$('#quick-original').value;storageSet('aimers-draft-new',draft);writeEntry();return;}
+ if(form.id==='quick-entry'){
+  const original=$('#quick-original').value,button=form.querySelector('[type="submit"]');if(!original.trim()){toast('메모를 한 줄 이상 적어주세요.');return;}
+  busy=true;button.disabled=true;button.textContent='저장 중...';
+  try{await api('entries','POST',{kind:'memo',original,date:state.today,category:state.categories[0]?.name||'대외활동',visibility:'private'});try{sessionStorage.removeItem('aimers-memo-draft');}catch{}await refresh();announce('메모를 저장했어요. 회고할 때 다시 꺼내볼 수 있어요.');}
+  catch(error){toast(error.message);}finally{busy=false;if(button.isConnected){button.disabled=false;button.textContent='메모 저장';}}return;
+ }
  if(form.id==='recommend-form'){
   const data=Object.fromEntries(new FormData(form));
   await aiTask(form.querySelector('[type="submit"]'),'ai/recommend',data,result=>{
    $('#recommend-results').innerHTML='<p class="note">'+result.total+'개 중 최근 '+result.considered+'개 기록을 살펴봤어요.</p>'+(result.recommendations.length?result.recommendations.map(r=>{const e=state.entries.find(e=>e.id===r.id);return '<section class="question-card"><h3>'+esc(e.title)+'</h3><p>'+esc(r.reason)+'</p><p><strong>작성할 때 강조할 점</strong><br>'+esc(r.angle)+'</p>'+btn('원문 확인','detail','white small','','data-id="'+e.id+'"')+'</section>';}).join(''):'<p class="form-note">적합한 기록을 찾지 못했어요. 카테고리를 넓히거나 다른 문항을 입력해 보세요.</p>');
   });return;
  }
- if(form.id==='entry-form'){try{appendFollowup();}catch(e){errorInDialog(e.message);return;}}
+ if(form.id==='entry-form'){try{appendReviewAnswers();appendFollowup();}catch(e){errorInDialog(e.message);return;}}
  busy=true;const inputs=Array.from(form.elements).filter(e=>['INPUT','TEXTAREA','SELECT'].includes(e.tagName)),inputDisabled=inputs.map(e=>e.disabled);const submit=event.submitter;const submitLabel=submit?.innerHTML;const buttons=$$('button[type="submit"]');const previousDisabled=buttons.map(b=>b.disabled);buttons.forEach(b=>b.disabled=true);if(submit)submit.textContent=submit.value==='ai'?'AI가 정리하고 저장 중…':'저장 중…';
  try{
- const data=Object.fromEntries(new FormData(form));inputs.forEach(e=>e.disabled=true);
- if(form.id==='entry-form'){data.useAI=submit?.value==='ai';data.tags=data.tags.split(',').map(s=>s.trim()).filter(Boolean);await api(form.dataset.id?'entries/'+form.dataset.id:'entries',form.dataset.id?'PATCH':'POST',data);try{sessionStorage.removeItem(form.dataset.draft)}catch{}closeDialog();await refresh();announce('기록을 저장했어요.');}
+ const data=form.id==='entry-form'?editorPayload():Object.fromEntries(new FormData(form));inputs.forEach(e=>e.disabled=true);
+ if(form.id==='entry-form'){data.useAI=submit?.value==='ai';await api(form.dataset.id?'entries/'+form.dataset.id:'entries',form.dataset.id?'PATCH':'POST',data);try{sessionStorage.removeItem(form.dataset.draft)}catch{}closeDialog();await refresh();announce('기록을 저장했어요.');}
  else if(form.id==='category-form'){await api('categories','POST',data);closeDialog();await refresh();announce('카테고리를 만들었어요.');}
  else if(form.id==='group-form'){const g=await api('groups','POST',data);closeDialog();await refresh();navigate('groups');inviteDialog(g.id);announce('그룹을 만들었어요.');}
  else if(form.id==='profile-form'){if(data.cadence==='custom')data.cadence=Number($('#custom-cadence').value);data.avatar=profileAvatar;await api('profile','PATCH',data);await refresh();toast('설정을 저장했어요.');}
  }catch(e){if($('.dialog'))errorInDialog(e.message);else toast(e.message);}finally{busy=false;inputs.forEach((e,i)=>{if(e.isConnected)e.disabled=inputDisabled[i];});buttons.forEach((b,i)=>{if(b.isConnected)b.disabled=previousDisabled[i];});if(submit?.isConnected)submit.innerHTML=submitLabel;}
 });
 document.addEventListener('input',event=>{
- if(event.target.id==='quick-original'){const draft=storageGet('aimers-draft-new')||{title:'',category:state.categories[0]?.name||'대외활동',date:state.today,tags:[],visibility:'inherit'};draft.original=event.target.value;if(draft.followup)draft.followup=draft.followup.answer.trim()?{...draft.followup,stale:true}:null;storageSet('aimers-draft-new',draft);}
+ if(event.target.id==='quick-original')storageSet('aimers-memo-draft',{original:event.target.value});
  if(event.target.id==='search'){query=event.target.value;const pos=event.target.selectionStart;render();$('#search').focus();$('#search').setSelectionRange(pos,pos);}
  if(event.target.closest('#entry-form')||event.target.id==='entry-visibility'){
   const form=$('#entry-form');if(event.target.id==='entry-original'){if($('#followup-question')){const answer=$('#followup-answer').value;$('#ai-followup').innerHTML=answer.trim()?followupHtml($('#followup-question').textContent,answer,true):'';}$('#live-summary').innerHTML=summaryHtml(localSummary(event.target.value));$('#summary-caption').textContent='원문이 바뀌었어요. AI와 다시 구체화하거나 저장할 때 정리할 수 있어요.';}
-  const data=Object.fromEntries(new FormData(form));data.tags=data.tags.split(',').map(s=>s.trim()).filter(Boolean);if($('#followup-question'))data.followup={question:$('#followup-question').textContent,answer:$('#followup-answer').value,stale:$('.followup').dataset.stale==='true'};storageSet(form.dataset.draft,data);
+  saveEditorDraft();
  }
  if(event.target.classList.contains('answer-input')){const key='aimers-interview-'+event.target.dataset.entry,data=storageGet(key);if(data){data.answers[Number(event.target.dataset.index)]=event.target.value;storageSet(key,data);}}
  if(event.target.id==='import-text'){$('[data-action="save-import"]').disabled=true;$('#import-preview').innerHTML='';}
 });
 document.addEventListener('change',async event=>{
  try{
+ if(event.target.hasAttribute('data-review-source'))saveEditorDraft();
+ if(event.target.id==='review-start'||event.target.id==='review-end'){
+  saveEditorDraft();editorContext.periodStart=$('#review-start').value;editorContext.periodEnd=$('#review-end').value;
+  editorContext.sourceIds=editorContext.sourceIds.filter(id=>state.entries.some(e=>e.id===id&&e.date>=editorContext.periodStart&&e.date<=editorContext.periodEnd));
+  $('#review-sources').innerHTML=reviewSourcesHtml();saveEditorDraft();
+ }
  if(event.target.id==='cadence')$('#custom-cadence-field').hidden=event.target.value!=='custom';
  if(event.target.id==='question-category'){
   const entries=state.entries.filter(e=>!event.target.value||e.category===event.target.value);
