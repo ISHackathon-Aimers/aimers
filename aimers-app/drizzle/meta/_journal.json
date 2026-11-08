@@ -22,6 +22,13 @@
       "when": 1794092400000,
       "tag": "0002_record_workflows",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1794099600000,
+      "tag": "0003_auth",
+      "breakpoints": true
     }
   ]
 }

@@ -3,9 +3,10 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync,mkdirSync,existsSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
-import {randomUUID,createHash} from 'node:crypto';
+import {createHash} from 'node:crypto';
 import {handleApi} from './src/api.mjs';
 import {createAI} from './src/ai.mjs';
+import {createAuth} from './src/auth.mjs';
 import {loadEnvFile} from 'node:process';
 const root=path.dirname(fileURLToPath(import.meta.url));
 if(existsSync(path.join(root,'.env')))loadEnvFile(path.join(root,'.env'));
@@ -19,6 +20,7 @@ if(!sqlite.prepare('PRAGMA table_info(users)').all().some(c=>c.name==='start_dat
 if(!sqlite.prepare('PRAGMA table_info(entries)').all().some(c=>c.name==='kind')){
  sqlite.exec('BEGIN');try{sqlite.exec(readFileSync(path.join(root,'drizzle/0002_record_workflows.sql'),'utf8'));sqlite.exec('COMMIT');}catch(e){sqlite.exec('ROLLBACK');throw e;}
 }
+sqlite.exec(readFileSync(path.join(root,'drizzle/0003_auth.sql'),'utf8'));
 const localIdentity=sid=>'local-'+createHash('sha256').update(sid).digest('hex');
 // Keep existing browser cookies working without exposing their bearer value as a public user ID.
 for(const user of sqlite.prepare("SELECT id FROM users WHERE id LIKE 'local-%'").all()){
@@ -33,22 +35,26 @@ export const db={
  batch:async(items)=>{sqlite.exec('BEGIN');try{for(const [sql,args]of items)sqlite.prepare(sql).run(...args);sqlite.exec('COMMIT');}catch(e){sqlite.exec('ROLLBACK');throw e;}}
 };
 const port=Number(process.env.PORT||4173);
-const allowedHosts=new Set(['127.0.0.1:'+port,'localhost:'+port]);
+const appOrigin=new URL(process.env.APP_ORIGIN||'http://127.0.0.1:'+port).origin;
+const demo=process.env.AIMERS_DEMO==='1';
+if(demo&&!['127.0.0.1','localhost'].includes(new URL(appOrigin).hostname))throw Error('Demo mode is limited to loopback origins');
+if(!['127.0.0.1','localhost'].includes(new URL(appOrigin).hostname)&&!appOrigin.startsWith('https:'))throw Error('Public APP_ORIGIN must use HTTPS');
+const auth=createAuth({db,clientId:process.env.GOOGLE_CLIENT_ID,clientSecret:process.env.GOOGLE_CLIENT_SECRET,origin:appOrigin,demo});
+const allowedHosts=new Set([new URL(appOrigin).host,'127.0.0.1:'+port,'localhost:'+port]);
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.woff2':'font/woff2','.txt':'text/plain; charset=utf-8'};
 const server=createServer(async(req,res)=>{
  try{
  if(!allowedHosts.has(req.headers.host)){res.writeHead(403);res.end('Local preview only');return;}
- const url=new URL(req.url,'http://'+req.headers.host);
+ const url=new URL(req.url,appOrigin);
  if(url.pathname.startsWith('/api/')){
-  let sid=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('aimers_session='))?.slice(15);
-  // A random, persistent browser session is local preview identity, not production authentication.
-  if(!sid||!/^[a-f0-9-]{36}$/.test(sid)){sid=randomUUID();res.setHeader('set-cookie','aimers_session='+sid+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000');}
   let bytes=0,chunks=[];
   for await(const chunk of req){bytes+=chunk.length;if(bytes>300000){res.writeHead(413);res.end('Request too large');return;}chunks.push(chunk);}
   const headers=new Headers();for(const [k,v]of Object.entries(req.headers))if(typeof v==='string'&&!k.startsWith('oai-authenticated-user-'))headers.set(k,v);
   const request=new Request(url,{method:req.method,headers,body:['GET','HEAD'].includes(req.method)?undefined:Buffer.concat(chunks)});
-  const response=await handleApi(request,db,localIdentity(sid),{demo:true,ai});
-  res.writeHead(response.status,Object.fromEntries(response.headers));res.end(await response.text());return;
+  let response=await auth.handle(request);
+  if(!response){const session=await auth.resolve(request);if(ai&&session.identity&&req.method==='POST'&&url.pathname.startsWith('/api/ai/')&&!await auth.allowAI(session.identity))response=Response.json({error:'한 시간에 AI 기능을 30회까지 사용할 수 있어요. 잠시 후 다시 시도해 주세요.'},{status:429});else response=await handleApi(request,db,session.identity,{demo:session.demo,account:session.account,ai});if(session.cookie)response.headers.append('set-cookie',session.cookie);}
+  const responseHeaders=Object.fromEntries(response.headers),setCookies=response.headers.getSetCookie();if(setCookies.length)responseHeaders['set-cookie']=setCookies;
+  res.writeHead(response.status,responseHeaders);res.end(await response.text());return;
  }
  const name=url.pathname==='/'?'index.html':decodeURIComponent(url.pathname).replace(/^\//,'');
  const file=path.resolve(root,'public',name);
@@ -57,5 +63,5 @@ const server=createServer(async(req,res)=>{
  res.end(readFileSync(file));
  }catch{res.writeHead(500);res.end('Server error');}
 });
-server.listen(port,'127.0.0.1',()=>console.log('Aimers is running at http://127.0.0.1:'+port));
+server.listen(port,process.env.HOST||'127.0.0.1',()=>console.log('Aimers is running at '+appOrigin));
 for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>server.close(()=>{sqlite.close();process.exit(0);}));

@@ -20,6 +20,9 @@ export function streak(entries, now = new Date()) {
 const colors=['blue','purple','mint','orange','pink','gray'];
 const uid=()=>crypto.randomUUID();
 const clean=(v,max=500)=>typeof v==='string'?v.trim().slice(0,max):'';
+export function classifyExperience(text){
+ return [['협업',/팀|협업|동료|함께/],['문제 해결',/문제|해결|오류|개선|원인/],['리더십',/이끌|팀장|리더|총괄|운영/],['소통',/발표|설득|의견|회의|인터뷰/],['분석',/분석|데이터|기준|설문|비교/],['학습',/배웠|학습|공부|피드백|연습/]].filter(([,pattern])=>pattern.test(text)).map(([label])=>label);
+}
 function fail(message,status=400){throw Object.assign(new Error(message),{status});}
 export function summarize(original) {
   const sentences=original.split(/\n+|(?<=[.!?。])\s+/u).map(s=>s.trim()).filter(Boolean);
@@ -40,7 +43,7 @@ function validateEntry(data){
  if(!title||!category||!original.trim())fail('제목, 카테고리와 활동 내용을 입력해 주세요.');
  if(original.length>(kind==='memo'?2000:20000))fail(kind==='memo'?'빠른 메모는 2,000자까지 저장할 수 있어요.':'활동 내용은 20,000자까지 저장할 수 있어요.');
  if(!validDate(date)||date>dateKey())fail('활동 날짜를 확인해 주세요. 미래 날짜는 기록할 수 없어요.');
- const tags=(Array.isArray(data.tags)?data.tags:[]).map(t=>clean(t,20)).filter(Boolean).slice(0,6);
+ const tags=[...new Set([...(Array.isArray(data.tags)?data.tags:[]).map(t=>clean(t,20)).filter(Boolean),...classifyExperience(original)])].slice(0,6);
  const visibility=data.visibility??'inherit';if(!['inherit','private','group','public'].includes(visibility))fail('공개 범위를 확인해 주세요.');
  const workflow={sourceIds:validateSourceIds(data.sourceIds||[]),conversation:validateConversation(data.conversation||[])};
  if(kind==='reflection')Object.assign(workflow,reviewPeriod(data));
@@ -75,7 +78,7 @@ async function seed(db,id){
  await db.run('INSERT INTO entries(id,user_id,title,category,date,original,summary,tags,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',['sample-'+uid(),id,title,category,dateKey(created),original,JSON.stringify(summarize(original)),JSON.stringify(tags),created,created]);
  }
 }
-export async function handleApi(request,db,identity,{demo=false,ai=null}={}) {
+export async function handleApi(request,db,identity,{demo=false,account=null,ai=null}={}) {
  try{
   if(!identity)fail('로그인이 필요해요.',401);
   const url=new URL(request.url),p=url.pathname,method=request.method;
@@ -96,8 +99,18 @@ export async function handleApi(request,db,identity,{demo=false,ai=null}={}) {
     for(const m of g.members){const profile=await db.get('SELECT * FROM users WHERE id=?',[m.id]);const recent=await db.all('SELECT created_at,date FROM entries WHERE user_id=? ORDER BY created_at DESC',[m.id]);m.progress=recordingProgress(recent,profile);m.done=m.progress.done;m.streak=m.progress.count;m.avatar=profile.avatar;m.cadence=profile.cadence;}
    }
    const notifications=await db.all('SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50',[identity]);
-    return json({me:{...me,start_date:me.start_date||dateKey(me.created_at)},entries,categories,groups,notifications,mode:demo?'local':'hosted',today:dateKey(),streak:streak(entries),progress:recordingProgress(entries,me),aiEnabled:!!ai,interviewReferences:interviewSources,questionFocuses:questionAngles.map(({id,label})=>({id,label}))});
+    return json({me:{...me,start_date:me.start_date||dateKey(me.created_at)},entries,categories,groups,notifications,account,mode:demo?'local':'hosted',today:dateKey(),streak:streak(entries),progress:recordingProgress(entries,me),aiEnabled:!!ai,questionFocuses:questionAngles.map(({id,label})=>({id,label}))});
   }
+   if(p.startsWith('/api/practice/')&&['GET','PUT'].includes(method)){
+    const entryId=p.slice('/api/practice/'.length),entry=await db.get('SELECT id,updated_at FROM entries WHERE id=? AND user_id=?',[entryId,identity]);
+    if(!entry)fail('본인의 경험에 대해서만 면접 답변을 보관할 수 있어요.',404);
+    if(method==='GET'){const saved=await db.get('SELECT payload FROM interview_practice WHERE user_id=? AND entry_id=?',[identity,entryId]);return json({practice:saved?JSON.parse(saved.payload):null});}
+    if(body.updatedAt!==entry.updated_at)fail('경험이 바뀌었어요. 기록을 다시 열어 질문을 만들어 주세요.',409);
+    if(!Array.isArray(body.questions)||body.questions.length>24||!Array.isArray(body.answers)||body.answers.length!==body.questions.length||body.answers.some(a=>typeof a!=='string'||a.length>5000))fail('면접 질문과 답변 형식을 확인해 주세요.');
+    const questions=body.questions.map(q=>{if(!q||typeof q.question!=='string'||!q.question.trim()||q.question.length>700)fail('면접 질문을 확인해 주세요.');const values={question:q.question,focus:clean(q.focus,40),anchor:clean(q.anchor,100),intent:clean(q.intent,700)};for(const key of ['followups','answerGuide']){if(!Array.isArray(q[key]||[])||(q[key]||[]).length>3||(q[key]||[]).some(v=>typeof v!=='string'||v.length>700))fail('면접 질문 정보를 확인해 주세요.');values[key]=q[key]||[];}return values;});
+    const payload={questions,answers:body.answers,updatedAt:entry.updated_at};
+    await db.run('INSERT INTO interview_practice(user_id,entry_id,payload,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id,entry_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at',[identity,entryId,JSON.stringify(payload),now]);return json({ok:true});
+   }
    if(p==='/api/public'&&method==='GET'){
     const offset=Number(url.searchParams.get('offset')||0);if(!Number.isInteger(offset)||offset<0)fail('페이지를 확인해 주세요.');
     const rows=await db.all("SELECT e.*,u.name AS author_name,u.avatar AS author_avatar FROM entries e JOIN users u ON u.id=e.user_id WHERE (CASE WHEN e.visibility='inherit' THEN u.visibility ELSE e.visibility END)='public' ORDER BY e.created_at DESC,e.id LIMIT 31 OFFSET ?",[offset]);
@@ -184,7 +197,7 @@ export async function handleApi(request,db,identity,{demo=false,ai=null}={}) {
   }
   if(p.startsWith('/api/entries/')&&['DELETE','PATCH'].includes(method)){
    const id=p.split('/').pop(),existing=await db.get('SELECT * FROM entries WHERE id=? AND user_id=?',[id,identity]);if(!existing)fail('기록을 찾을 수 없어요.',404);
-   if(method==='DELETE'){await db.run('DELETE FROM entries WHERE id=? AND user_id=?',[id,identity]);return json({ok:true});}
+   if(method==='DELETE'){await db.batch([['DELETE FROM interview_practice WHERE entry_id=? AND user_id=?',[id,identity]],['DELETE FROM entries WHERE id=? AND user_id=?',[id,identity]]]);return json({ok:true});}
    const e=validateEntry({...entryView(existing),...body});
    if(!await db.get('SELECT id FROM categories WHERE user_id=? AND name=?',[identity,e.category]))fail('카테고리를 먼저 추가해 주세요.');
     if(body.useAI&&!ai)fail('AI 연결이 설정되지 않았어요. 원문만 저장할 수 있어요.',503);

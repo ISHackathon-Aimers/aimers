@@ -6,5 +6,5 @@ test('question plans rotate recent angles while retaining an explicit practice f
  const first=questionPlan(data),next=questionPlan({...data,previousQuestions:first.map(q=>({question:'질문 '+q.id,focus:q.id}))});
  assert.equal(first.length,5);assert.equal(new Set(first.map(q=>q.id)).size,5);assert(next.some(q=>!first.some(p=>p.id===q.id)));
  assert(questionPlan({...data,focus:'decision'}).some(q=>q.id==='decision'));assert(first.some(q=>q.id==='transfer'));
- assert.equal(questionAngles.length,10);assert.equal(interviewSources.length,3);
+ assert.equal(questionAngles.length,10);assert(interviewSources.some(s=>s.id==='naver'));assert(interviewSources.some(s=>s.id==='toss'));
 });

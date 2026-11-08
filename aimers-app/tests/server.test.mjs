@@ -16,7 +16,7 @@ test('existing SQLite profiles and cookies migrate once without revealing sessio
  let firstId;
  try{for(let attempt=0;attempt<2;attempt++){
   const probe=createServer();probe.listen(0,'127.0.0.1');await once(probe,'listening');const port=probe.address().port;await new Promise(resolve=>probe.close(resolve));
-  const child=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,PORT:String(port),AIMERS_DATA_DIR:dir},stdio:['ignore','pipe','pipe'],windowsHide:true});
+  const child=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,PORT:String(port),AIMERS_DATA_DIR:dir,AIMERS_DEMO:'1'},stdio:['ignore','pipe','pipe'],windowsHide:true});
   try{
    await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Startup timeout')),10000);child.stdout.on('data',chunk=>{if(String(chunk).includes('Aimers is running')){clearTimeout(timer);resolve();}});child.once('exit',code=>{clearTimeout(timer);reject(Error('Server exited '+code));});});
    const response=await fetch('http://127.0.0.1:'+port+'/api/state',{headers:{cookie:'aimers_session='+cookie}});assert.equal(response.status,200);

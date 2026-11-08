@@ -8,11 +8,24 @@ function fixture(options={}){
  const sql=new DatabaseSync(':memory:');sql.exec(readFileSync(new URL('../drizzle/0000_aimers.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../drizzle/0001_profiles.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../drizzle/0002_record_workflows.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../drizzle/0003_auth.sql',import.meta.url),'utf8'));
  const db={get:async(q,a=[])=>sql.prepare(q).get(...a),all:async(q,a=[])=>sql.prepare(q).all(...a),run:async(q,a=[])=>sql.prepare(q).run(...a),batch:async(items)=>{sql.exec('BEGIN');try{for(const[q,a]of items)sql.prepare(q).run(...a);sql.exec('COMMIT')}catch(e){sql.exec('ROLLBACK');throw e;}}};
  const call=async(id,path,method='GET',body,extra={})=>{const request=new Request('https://aimers.test/api/'+path,{method,headers:{'content-type':'application/json',origin:'https://aimers.test',...extra},body:body===undefined?undefined:JSON.stringify(body)});const r=await handleApi(request,db,id,options);return{status:r.status,data:await r.json()};};
  return {db,call,close:()=>sql.close()};
 }
 const entry=(overrides={})=>({title:'나만의 프로젝트',category:'프로젝트',date:dateKey(),original:'나는 인터뷰 진행을 맡았다.\n팀원과 문제를 해결했다.\n협업의 중요성을 배웠다.',tags:['협업'],...overrides});
+test('internal classification and interview answers persist with owner-only access and stale record protection',async()=>{
+ const f=fixture();try{
+  const created=await f.call('owner','entries','POST',entry({kind:'memo',tags:[]})),id=created.data.id;
+  const state=(await f.call('owner','state')).data,e=state.entries.find(e=>e.id===id);assert(e.tags.includes('협업'));assert(e.tags.includes('문제 해결'));
+  const practice={updatedAt:e.updated_at,questions:[{question:'어떤 행동을 했나요?',focus:'ownership',followups:[],answerGuide:[]}],answers:['나는 인터뷰 진행을 맡았다.']};
+  assert.equal((await f.call('owner','practice/'+id,'PUT',practice)).status,200);
+  assert.equal((await f.call('owner','practice/'+id)).data.practice.answers[0],practice.answers[0]);
+  assert.equal((await f.call('other','practice/'+id)).status,404);assert.equal((await f.call('other','practice/'+id,'PUT',practice)).status,404);
+  assert.equal((await f.call('owner','practice/'+id,'PUT',{...practice,updatedAt:'stale'})).status,409);
+  await f.call('owner','entries/'+id,'DELETE',{});assert.equal((await f.db.all('SELECT * FROM interview_practice')).length,0);
+ }finally{f.close();}
+});
 test('original survives summary extraction and a second user cannot read, edit or delete it',async()=>{
  const f=fixture();try{
  const a=await f.call('a','entries','POST',entry());assert.equal(a.status,201);
@@ -188,6 +201,6 @@ test('interview requests carry role, focus and previous questions while disallow
   const request={entryId:saved.data.id,targetRole:'서비스 기획',focus:'decision',previousQuestions:[{question:'이전 질문',focus:'ownership'}]};
   assert.equal((await f.call('a','ai/interview','POST',request)).status,200);assert.equal(calls[0].targetRole,'서비스 기획');assert.equal(calls[0].focus,'decision');assert.equal(calls[0].previousQuestions[0].question,'이전 질문');
   assert.equal((await f.call('b','ai/interview','POST',request)).status,404);
-  const state=(await f.call('a','state')).data;assert.equal(state.interviewReferences.length,3);assert.equal(state.questionFocuses.length,10);
+  const state=(await f.call('a','state')).data;assert.equal(state.interviewReferences,undefined);assert.equal(state.questionFocuses.length,10);
  }finally{f.close();}
 });
