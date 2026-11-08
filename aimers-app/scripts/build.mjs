@@ -1,5 +1,5 @@
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
-const api=(await readFile('src/periods.mjs','utf8'))+'\n'+(await readFile('src/ai.mjs','utf8'))+'\n'+(await readFile('src/api.mjs','utf8')).replace("import {recordingProgress,validDate} from './periods.mjs';",'');
+const api=(await readFile('src/question-guides.mjs','utf8'))+'\n'+(await readFile('src/periods.mjs','utf8'))+'\n'+(await readFile('src/ai.mjs','utf8')).replace("import {interviewSources,questionPlan} from './question-guides.mjs';",'')+'\n'+(await readFile('src/api.mjs','utf8')).replace("import {recordingProgress,validDate} from './periods.mjs';",'');
 const assets={};for(const [name,type]of [['index.html','text/html'],['style.css','text/css'],['app.js','text/javascript'],['favicon.svg','image/svg+xml']])assets[name]={body:await readFile('public/'+name,'utf8'),type};
 assets['fonts/PretendardVariable.woff2']={body:(await readFile('public/fonts/PretendardVariable.woff2')).toString('base64'),type:'font/woff2',binary:true};
 assets['fonts/OFL.txt']={body:await readFile('public/fonts/OFL.txt','utf8'),type:'text/plain'};

@@ -7,6 +7,7 @@ import { handleApi,dateKey,streak,periodStart } from '../src/api.mjs';
 function fixture(options={}){
  const sql=new DatabaseSync(':memory:');sql.exec(readFileSync(new URL('../drizzle/0000_aimers.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../drizzle/0001_profiles.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../drizzle/0002_record_workflows.sql',import.meta.url),'utf8'));
  const db={get:async(q,a=[])=>sql.prepare(q).get(...a),all:async(q,a=[])=>sql.prepare(q).all(...a),run:async(q,a=[])=>sql.prepare(q).run(...a),batch:async(items)=>{sql.exec('BEGIN');try{for(const[q,a]of items)sql.prepare(q).run(...a);sql.exec('COMMIT')}catch(e){sql.exec('ROLLBACK');throw e;}}};
  const call=async(id,path,method='GET',body,extra={})=>{const request=new Request('https://aimers.test/api/'+path,{method,headers:{'content-type':'application/json',origin:'https://aimers.test',...extra},body:body===undefined?undefined:JSON.stringify(body)});const r=await handleApi(request,db,id,options);return{status:r.status,data:await r.json()};};
  return {db,call,close:()=>sql.close()};

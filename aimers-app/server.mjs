@@ -16,6 +16,9 @@ sqlite.exec(readFileSync(path.join(root,'drizzle/0000_aimers.sql'),'utf8'));
 if(!sqlite.prepare('PRAGMA table_info(users)').all().some(c=>c.name==='start_date')){
  sqlite.exec('BEGIN');try{sqlite.exec(readFileSync(path.join(root,'drizzle/0001_profiles.sql'),'utf8'));sqlite.exec('COMMIT');}catch(e){sqlite.exec('ROLLBACK');throw e;}
 }
+if(!sqlite.prepare('PRAGMA table_info(entries)').all().some(c=>c.name==='kind')){
+ sqlite.exec('BEGIN');try{sqlite.exec(readFileSync(path.join(root,'drizzle/0002_record_workflows.sql'),'utf8'));sqlite.exec('COMMIT');}catch(e){sqlite.exec('ROLLBACK');throw e;}
+}
 const localIdentity=sid=>'local-'+createHash('sha256').update(sid).digest('hex');
 // Keep existing browser cookies working without exposing their bearer value as a public user ID.
 for(const user of sqlite.prepare("SELECT id FROM users WHERE id LIKE 'local-%'").all()){
